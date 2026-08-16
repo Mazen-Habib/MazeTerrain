@@ -1,5 +1,6 @@
 node_modules/
 dist/
+*.tsbuildinfo
 
 # Spec pack — kept local, not published
 docs/
