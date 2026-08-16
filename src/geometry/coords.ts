@@ -154,6 +154,15 @@ export interface ResolvedGrid {
   cols: number;
   rows: number;
   resolutionCoarsened: boolean;
+  /**
+   * The finest sampling step this print can actually resolve: one nozzle width,
+   * expressed in world metres.
+   */
+  printableStep_m: number;
+  /** True when 'auto' was floored by printableStep_m rather than by the grid target. */
+  resolutionNozzleLimited: boolean;
+  /** True when an explicit resolution_m asks for detail below the nozzle. */
+  belowNozzle: boolean;
 }
 
 /**
@@ -164,10 +173,29 @@ export function resolveGrid(config: GenerateConfig): ResolvedGrid {
   const { origin, extentX_m, extentY_m } = worldExtent(config.bbox);
   const longEdge_m = Math.max(extentX_m, extentY_m);
 
-  let resolution_m =
-    config.resolution_m === 'auto'
-      ? clamp(longEdge_m / AUTO_GRID_TARGET, MIN_RESOLUTION_M, MAX_RESOLUTION_M)
-      : clamp(config.resolution_m, MIN_RESOLUTION_M, MAX_RESOLUTION_M);
+  // Known before the DEM arrives, because it depends only on the selection and
+  // the requested print size.
+  const scale = config.modelWidth_mm / longEdge_m;
+  const printableStep_m = config.nozzleDiameter_mm / scale;
+
+  let resolutionNozzleLimited = false;
+  let belowNozzle = false;
+  let resolution_m: number;
+
+  if (config.resolution_m === 'auto') {
+    const target = clamp(longEdge_m / AUTO_GRID_TARGET, MIN_RESOLUTION_M, MAX_RESOLUTION_M);
+    // Never sample finer than the nozzle can print. A grid step below one nozzle
+    // width does not add detail — it manufactures knife-edge ridges the slicer
+    // cannot lay down, and multiplies the triangle count for nothing.
+    resolution_m = Math.max(target, printableStep_m);
+    resolutionNozzleLimited = resolution_m > target;
+    resolution_m = clamp(resolution_m, MIN_RESOLUTION_M, MAX_RESOLUTION_M);
+  } else {
+    resolution_m = clamp(config.resolution_m, MIN_RESOLUTION_M, MAX_RESOLUTION_M);
+    // Manual overrides are honoured — the user may want the mesh for something
+    // other than this printer — but they get told.
+    belowNozzle = resolution_m < printableStep_m;
+  }
 
   let cols = Math.ceil(extentX_m / resolution_m) + 1;
   let rows = Math.ceil(extentY_m / resolution_m) + 1;
@@ -186,7 +214,18 @@ export function resolveGrid(config: GenerateConfig): ResolvedGrid {
     resolutionCoarsened = true;
   }
 
-  return { origin, extentX_m, extentY_m, resolution_m, cols, rows, resolutionCoarsened };
+  return {
+    origin,
+    extentX_m,
+    extentY_m,
+    resolution_m,
+    cols,
+    rows,
+    resolutionCoarsened,
+    printableStep_m,
+    resolutionNozzleLimited,
+    belowNozzle,
+  };
 }
 
 /**

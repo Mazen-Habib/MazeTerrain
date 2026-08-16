@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { decodePixels, TERRARIUM_NODATA } from '../src/data/dem/datasets';
-import { inpaintNoData, isNoData, sampleBilinear, type Mosaic } from '../src/data/dem/sampler';
-import { chooseZoom, latToTileY, lonToTileX, metresPerPixel, tileRangeForBBox } from '../src/data/dem/tiles';
+import {
+  inpaintNoData,
+  isNoData,
+  sampleBilinear,
+  sampleBoxLonLat,
+  sampleLonLat,
+  type Mosaic,
+} from '../src/data/dem/sampler';
+import {
+  chooseZoom,
+  latToTileY,
+  lonToTileX,
+  metresPerPixel,
+  tileRangeForBBox,
+  tileXToLon,
+  tileYToLat,
+} from '../src/data/dem/tiles';
 
 function mosaic(width: number, height: number, values: number[]): Mosaic {
   return {
@@ -84,6 +99,58 @@ describe('sampleBilinear', () => {
   it('clamps outside the mosaic instead of returning NaN', () => {
     expect(sampleBilinear(m, -5, -5)).toBe(0);
     expect(sampleBilinear(m, 99, 99)).toBe(30);
+  });
+});
+
+describe('sampleBoxLonLat', () => {
+  /** A mosaic where one pixel is a 1000 m spike above a flat 100 m plain. */
+  function spikeMosaic(size = 16): Mosaic {
+    const data = new Float32Array(size * size).fill(100);
+    data[(size / 2) * size + size / 2] = 1100;
+    return { data, width: size, height: size, z: 10, tileSize: size, originPxX: 0, originPxY: 0 };
+  }
+
+  it('falls back to bilinear when upsampling', () => {
+    const m = spikeMosaic();
+    const lon = tileXToLon(8 / 16, 10);
+    const lat = tileYToLat(8 / 16, 10);
+    expect(sampleBoxLonLat(m, lon, lat, 0)).toBe(sampleLonLat(m, lon, lat));
+  });
+
+  /**
+   * The point of the box filter: when the output step covers several source
+   * pixels, a lone extreme pixel must be averaged in, not reproduced at full
+   * height as a spike. docs/08-pitfalls.md#sub-nozzle-terrain-detail.
+   */
+  it('averages a lone spike away instead of reproducing it', () => {
+    const m = spikeMosaic();
+    const lon = tileXToLon(8 / 16, 10);
+    const lat = tileYToLat(8 / 16, 10);
+
+    const point = sampleBoxLonLat(m, lon, lat, 0);
+    const boxed = sampleBoxLonLat(m, lon, lat, 2);
+
+    expect(point).toBeCloseTo(1100, 0);
+    // 1 spike pixel in a 5x5 window: 100 + 1000/25 = 140.
+    expect(boxed).toBeCloseTo(140, 0);
+    expect(boxed).toBeLessThan(point);
+  });
+
+  it('leaves genuinely flat terrain untouched', () => {
+    const flat: Mosaic = {
+      data: new Float32Array(256).fill(742),
+      width: 16, height: 16, z: 10, tileSize: 16, originPxX: 0, originPxY: 0,
+    };
+    const lon = tileXToLon(8 / 16, 10);
+    const lat = tileYToLat(8 / 16, 10);
+    expect(sampleBoxLonLat(flat, lon, lat, 3)).toBeCloseTo(742, 6);
+  });
+
+  it('stays finite at the mosaic corner, where the window is clipped', () => {
+    const m = spikeMosaic();
+    const lon = tileXToLon(0, 10);
+    const lat = tileYToLat(0, 10);
+    expect(Number.isFinite(sampleBoxLonLat(m, lon, lat, 4))).toBe(true);
   });
 });
 

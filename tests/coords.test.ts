@@ -89,8 +89,11 @@ describe('bboxCentre', () => {
 });
 
 describe('resolveGrid', () => {
-  it('auto-resolution targets a few hundred samples on the long edge', () => {
-    const grid = resolveGrid(testConfig());
+  it('auto-resolution targets a few hundred samples on the long edge when the nozzle allows', () => {
+    // A 400 mm print of this selection is not nozzle-limited, so the grid target
+    // governs. At 100 mm the nozzle floor wins instead — covered below.
+    const grid = resolveGrid(testConfig({ modelWidth_mm: 400 }));
+    expect(grid.resolutionNozzleLimited).toBe(false);
     const longEdge = Math.max(grid.cols, grid.rows);
     expect(longEdge).toBeGreaterThan(300);
     expect(longEdge).toBeLessThan(900);
@@ -106,6 +109,59 @@ describe('resolveGrid', () => {
     );
     expect(grid.cols * grid.rows).toBeLessThanOrEqual(MAX_GRID_VERTICES);
     expect(grid.resolutionCoarsened).toBe(true);
+  });
+
+  /**
+   * docs/08-pitfalls.md#sub-nozzle-terrain-detail — found when a 100 mm
+   * Matterhorn came out with 0.167 mm grid spacing against a 0.4 mm nozzle,
+   * turning real knife-edge ridges into unprintable blades.
+   */
+  describe('nozzle floor', () => {
+    it('never auto-samples finer than one nozzle width', () => {
+      const config = testConfig({ modelWidth_mm: 100, nozzleDiameter_mm: 0.4 });
+      const grid = resolveGrid(config);
+      const scale = config.modelWidth_mm / Math.max(grid.extentX_m, grid.extentY_m);
+
+      expect(grid.resolution_m).toBeGreaterThanOrEqual(grid.printableStep_m - 1e-9);
+      expect(grid.resolution_m * scale).toBeGreaterThanOrEqual(config.nozzleDiameter_mm - 1e-9);
+      expect(grid.resolutionNozzleLimited).toBe(true);
+    });
+
+    it('gives a larger print more detail', () => {
+      const small = resolveGrid(testConfig({ modelWidth_mm: 100 }));
+      const large = resolveGrid(testConfig({ modelWidth_mm: 300 }));
+      expect(large.resolution_m).toBeLessThan(small.resolution_m);
+      expect(large.cols).toBeGreaterThan(small.cols);
+    });
+
+    it('gives a coarser nozzle less detail', () => {
+      const fine = resolveGrid(testConfig({ nozzleDiameter_mm: 0.2 }));
+      const draft = resolveGrid(testConfig({ nozzleDiameter_mm: 0.8 }));
+      expect(draft.resolution_m).toBeGreaterThan(fine.resolution_m);
+    });
+
+    it('does not raise the step when the grid target is already coarser', () => {
+      // A large selection is grid-target-limited, not nozzle-limited.
+      const grid = resolveGrid(
+        testConfig({ bbox: { west: 0, east: 1, south: 45, north: 46 }, modelWidth_mm: 300 }),
+      );
+      expect(grid.resolutionNozzleLimited).toBe(false);
+    });
+
+    it('honours an explicit sub-nozzle step but flags it', () => {
+      // 20 m is under the ~37 m the nozzle can resolve here, but coarse enough
+      // not to trip the vertex cap — so this tests the nozzle flag alone.
+      const grid = resolveGrid(testConfig({ resolution_m: 20, modelWidth_mm: 100 }));
+      expect(grid.resolution_m).toBe(20);
+      expect(grid.resolutionCoarsened).toBe(false);
+      expect(grid.printableStep_m).toBeGreaterThan(20);
+      expect(grid.belowNozzle).toBe(true);
+    });
+
+    it('does not flag an explicit step that clears the nozzle', () => {
+      const grid = resolveGrid(testConfig({ resolution_m: 200, modelWidth_mm: 100 }));
+      expect(grid.belowNozzle).toBe(false);
+    });
   });
 
   it('clamps an out-of-range manual resolution', () => {

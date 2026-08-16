@@ -4,7 +4,8 @@
  * The grid is regular in local ENU metres — not in degrees — so a square
  * selection is square on the print bed at any latitude.
  */
-import { sampleLonLat, type Mosaic } from '../data/dem/sampler';
+import { sampleBoxLonLat, type Mosaic } from '../data/dem/sampler';
+import { metresPerPixel } from '../data/dem/tiles';
 import { unprojectENU, type ResolvedGrid } from './coords';
 
 export interface Heightfield {
@@ -42,13 +43,20 @@ export function buildHeightfield(mosaic: Mosaic, grid: ResolvedGrid): Heightfiel
 
   const data = new Float32Array(cols * rows);
 
+  // How many source pixels each output cell covers. Above one, we are
+  // downsampling and must average rather than point-sample, or single source
+  // pixels survive as spikes (docs/08-pitfalls.md#sub-nozzle-terrain-detail).
+  const sourceMpp = metresPerPixel(mosaic.z, origin.lat0, mosaic.tileSize);
+  const footprintPx = grid.resolution_m / sourceMpp;
+  const radiusPx = Math.floor(footprintPx / 2);
+
   for (let j = 0; j < rows; j++) {
     const y_m = y0_m + j * spacingY_m;
     const rowOffset = j * cols;
     for (let i = 0; i < cols; i++) {
       const x_m = x0_m + i * spacingX_m;
       const [lon, lat] = unprojectENU(x_m, y_m, origin);
-      let h = sampleLonLat(mosaic, lon, lat);
+      let h = sampleBoxLonLat(mosaic, lon, lat, radiusPx);
       if (CLAMP_TO_SEA_LEVEL && h < 0) h = 0;
       data[rowOffset + i] = h;
     }

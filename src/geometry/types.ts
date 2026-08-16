@@ -94,6 +94,13 @@ export interface GenerateConfig {
    * warning is expressed in layer heights (docs/02-feature-spec.md F8).
    */
   layerHeight_mm: number;
+  /**
+   * The printer's horizontal resolution limit. Not decoration either: it is the
+   * floor on the terrain sampling step, because sampling finer than the nozzle
+   * manufactures detail the printer cannot lay down.
+   * See docs/08-pitfalls.md#sub-nozzle-terrain-detail.
+   */
+  nozzleDiameter_mm: number;
 }
 
 export type ProgressStage =

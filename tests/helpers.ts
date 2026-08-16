@@ -38,6 +38,7 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     resolution_m: 'auto',
     smoothing: 0,
     layerHeight_mm: 0.2,
+    nozzleDiameter_mm: 0.4,
     ...overrides,
   };
 }

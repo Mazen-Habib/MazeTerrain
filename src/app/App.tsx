@@ -215,6 +215,27 @@ export function App() {
               disabled={busy}
               onChange={(v) => update({ layerHeight_mm: v })}
             />
+            <div className="field">
+              <label className="field__label" htmlFor="nozzle">
+                Printer nozzle<span className="field__unit">mm</span>
+              </label>
+              <select
+                id="nozzle"
+                className="select"
+                value={config.nozzleDiameter_mm}
+                onChange={(e) => update({ nozzleDiameter_mm: Number(e.target.value) })}
+                disabled={busy}
+              >
+                <option value={0.2}>0.2 mm — Fine</option>
+                <option value={0.4}>0.4 mm — Standard</option>
+                <option value={0.6}>0.6 mm — Fast</option>
+                <option value={0.8}>0.8 mm — Draft</option>
+              </select>
+              <p className="field__hint">
+                Sets the floor on terrain detail. Sampling finer than the nozzle makes ridges
+                the printer cannot lay down.
+              </p>
+            </div>
           </section>
 
           <section>
@@ -303,7 +324,16 @@ export function App() {
                   {(gridPreview.extentX_m / 1000).toFixed(1)} × {(gridPreview.extentY_m / 1000).toFixed(1)} km
                 </dd>
                 <dt>Sampling step</dt>
-                <dd>{gridPreview.resolution_m.toFixed(1)} m</dd>
+                <dd>
+                  {gridPreview.resolution_m.toFixed(1)} m
+                  {gridPreview.resolutionNozzleLimited ? (
+                    <span className="badge" title="Floored at one nozzle width">
+                      nozzle-limited
+                    </span>
+                  ) : null}
+                </dd>
+                <dt>Printable detail</dt>
+                <dd>{gridPreview.printableStep_m.toFixed(1)} m</dd>
                 <dt>Grid</dt>
                 <dd>
                   {gridPreview.cols} × {gridPreview.rows}

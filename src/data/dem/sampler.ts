@@ -144,3 +144,40 @@ export function sampleLonLat(m: Mosaic, lon: number, lat: number): number {
   const py = latToTileY(lat, m.z) * m.tileSize - m.originPxY;
   return sampleBilinear(m, px, py);
 }
+
+/**
+ * Area-averaged sample over the output cell's footprint.
+ *
+ * Bilinear reads the four pixels nearest a point. When the output step is
+ * coarser than the source — which is the normal case once the sampling step is
+ * floored at one nozzle width — point sampling skips source pixels entirely and
+ * whichever ones it happens to land on become spikes and pits. Averaging the
+ * footprint is the correct downsample and costs one pass over a small window.
+ *
+ * Falls back to bilinear when the footprint is a pixel or less, i.e. when we are
+ * upsampling and there is nothing to average.
+ */
+export function sampleBoxLonLat(m: Mosaic, lon: number, lat: number, radiusPx: number): number {
+  if (radiusPx < 1) return sampleLonLat(m, lon, lat);
+
+  const px = lonToTileX(lon, m.z) * m.tileSize - m.originPxX;
+  const py = latToTileY(lat, m.z) * m.tileSize - m.originPxY;
+  const cx = Math.round(px);
+  const cy = Math.round(py);
+
+  let acc = 0;
+  let n = 0;
+  for (let dy = -radiusPx; dy <= radiusPx; dy++) {
+    const y = cy + dy;
+    if (y < 0 || y >= m.height) continue;
+    const row = y * m.width;
+    for (let dx = -radiusPx; dx <= radiusPx; dx++) {
+      const x = cx + dx;
+      if (x < 0 || x >= m.width) continue;
+      acc += m.data[row + x];
+      n++;
+    }
+  }
+
+  return n > 0 ? acc / n : sampleLonLat(m, lon, lat);
+}

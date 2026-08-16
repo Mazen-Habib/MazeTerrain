@@ -84,5 +84,6 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
     resolution_m: 'auto',
     smoothing: 0,
     layerHeight_mm: 0.2,
+    nozzleDiameter_mm: 0.4,
   };
 }

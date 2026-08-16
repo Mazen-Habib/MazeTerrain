@@ -48,6 +48,18 @@ export async function assemble(
   const dataset = getDataset(config.dataset);
   const grid = resolveGrid(config);
 
+  if (grid.belowNozzle) {
+    warnings.push({
+      level: 'warn',
+      code: 'below-nozzle-detail',
+      message:
+        `Sampling step ${grid.resolution_m.toFixed(1)} m is finer than this printer can ` +
+        `resolve (${grid.printableStep_m.toFixed(1)} m at a ${config.nozzleDiameter_mm} mm nozzle ` +
+        `and ${config.modelWidth_mm} mm model). Ridges will come out as blades thinner than ` +
+        `the nozzle. Switch the sampling step to Auto, or print the model larger.`,
+    });
+  }
+
   if (grid.resolutionCoarsened) {
     warnings.push({
       level: 'warn',
