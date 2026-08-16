@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Spec pack — kept local, not published
+docs/
+
+.DS_Store
+*.log
+.env
+.env.local
