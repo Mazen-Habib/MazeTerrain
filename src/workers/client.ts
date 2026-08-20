@@ -6,7 +6,7 @@
  */
 import * as Comlink from 'comlink';
 import type { GenerateApi } from './generate.worker';
-import type { GenerateConfig, MeshBundle, ProgressCallback } from '../geometry/types';
+import type { GenerateRequest, MeshBundle, ProgressCallback } from '../geometry/types';
 
 let worker: Worker | null = null;
 let api: Comlink.Remote<GenerateApi> | null = null;
@@ -20,10 +20,10 @@ function ensureWorker(): Comlink.Remote<GenerateApi> {
 }
 
 export function generate(
-  config: GenerateConfig,
+  request: GenerateRequest,
   onProgress: ProgressCallback,
 ): Promise<MeshBundle> {
-  return ensureWorker().generate(config, Comlink.proxy(onProgress));
+  return ensureWorker().generate(request, Comlink.proxy(onProgress));
 }
 
 export function cancelGeneration(): void {

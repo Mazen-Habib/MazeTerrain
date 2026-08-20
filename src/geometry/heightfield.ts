@@ -67,6 +67,45 @@ export function buildHeightfield(mosaic: Mosaic, grid: ResolvedGrid): Heightfiel
 }
 
 /**
+ * Bilinear elevation at an arbitrary point in local ENU metres.
+ *
+ * Features drape on the SAME heightfield the terrain surface is built from.
+ * Sampling the DEM again at a different resolution is what opens hairline
+ * cracks between a road and the ground
+ * (docs/08-pitfalls.md#gaps-between-features-and-terrain).
+ */
+export function sampleHeightfieldAt(hf: Heightfield, x_m: number, y_m: number): number {
+  const { cols, rows, data, spacingX_m, spacingY_m } = hf;
+
+  const x0_m = -((cols - 1) * spacingX_m) / 2;
+  const y0_m = -((rows - 1) * spacingY_m) / 2;
+
+  let fx = spacingX_m > 0 ? (x_m - x0_m) / spacingX_m : 0;
+  let fy = spacingY_m > 0 ? (y_m - y0_m) / spacingY_m : 0;
+
+  fx = fx < 0 ? 0 : fx > cols - 1 ? cols - 1 : fx;
+  fy = fy < 0 ? 0 : fy > rows - 1 ? rows - 1 : fy;
+
+  const i0 = Math.floor(fx);
+  const j0 = Math.floor(fy);
+  const i1 = i0 + 1 < cols ? i0 + 1 : cols - 1;
+  const j1 = j0 + 1 < rows ? j0 + 1 : rows - 1;
+
+  const tx = fx - i0;
+  const ty = fy - j0;
+
+  const r0 = j0 * cols;
+  const r1 = j1 * cols;
+
+  const h00 = data[r0 + i0];
+  const h10 = data[r0 + i1];
+  const h01 = data[r1 + i0];
+  const h11 = data[r1 + i1];
+
+  return (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
+}
+
+/**
  * Laplacian smoothing, `passes` iterations.
  * Cosmetic only — it flattens genuine features, which is why the default is 0.
  */

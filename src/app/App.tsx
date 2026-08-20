@@ -10,17 +10,29 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { DEM_DATASETS } from '../data/dem/datasets';
 import { defaultConfig, PRESETS } from '../config/presets';
+import { GpxParseError, parseGpxText } from '../data/gpx/parse';
+import type { Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
 import { resolveGrid } from '../geometry/coords';
-import type { GenerateConfig, MeshBundle, Progress, ProgressStage } from '../geometry/types';
+import { fitSelectionToRoutes } from '../geometry/selection';
+import type {
+  BBox,
+  GenerateConfig,
+  MeshBundle,
+  Progress,
+  ProgressStage,
+  SerialisableRoute,
+} from '../geometry/types';
 import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
+import { RoutePanel } from './RoutePanel';
 
 const STAGE_LABELS: Array<{ stages: ProgressStage[]; label: string }> = [
   { stages: ['resolving'], label: 'Working out the scale' },
   { stages: ['fetching-dem'], label: 'Fetching elevation data' },
   { stages: ['building-heightfield'], label: 'Building the heightfield' },
   { stages: ['building-terrain'], label: 'Building the terrain' },
+  { stages: ['building-routes'], label: 'Embossing your route' },
   { stages: ['validating', 'done'], label: 'Finalising the mesh' },
 ];
 
@@ -29,9 +41,27 @@ const STAGE_ORDER: ProgressStage[] = [
   'fetching-dem',
   'building-heightfield',
   'building-terrain',
+  'building-routes',
   'validating',
   'done',
 ];
+
+function toSerialisable(routes: Route[]): SerialisableRoute[] {
+  return routes.map((r) => ({
+    id: r.id,
+    name: r.name,
+    points: r.points,
+    style: {
+      color: r.style.color,
+      width_mm: r.style.width_mm,
+      height_mm: r.style.height_mm,
+      profile: r.style.profile,
+      elevationSource: r.style.elevationSource,
+      demBlend: r.style.demBlend,
+      visible: r.style.visible,
+    },
+  }));
+}
 
 export function App() {
   const [presetId, setPresetId] = useState(PRESETS[0].id);
@@ -39,6 +69,8 @@ export function App() {
 
   const [config, setConfig] = useState<GenerateConfig>(() => defaultConfig(PRESETS[0].bbox));
   const [autoResolution, setAutoResolution] = useState(true);
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [areaLabel, setAreaLabel] = useState(PRESETS[0].label);
 
   const [progress, setProgress] = useState<Progress | null>(null);
   const [bundle, setBundle] = useState<MeshBundle | null>(null);
@@ -58,7 +90,70 @@ export function App() {
     const next = PRESETS.find((p) => p.id === id);
     if (!next) return;
     setPresetId(id);
+    setAreaLabel(next.label);
     setConfig((c) => ({ ...c, bbox: next.bbox }));
+    setDirty(true);
+  }, []);
+
+  const applyBBox = useCallback((bbox: BBox, label: string) => {
+    setConfig((c) => ({ ...c, bbox }));
+    setAreaLabel(label);
+    setDirty(true);
+  }, []);
+
+  /**
+   * Fit the selection to the routes. The roadmap calls this "the primary
+   * first-run path", so it also runs automatically on the first upload —
+   * the user should see something already working before touching a control.
+   */
+  const fitToRoutes = useCallback(
+    (list: Route[]) => {
+      const fitted = fitSelectionToRoutes(list);
+      if (fitted?.kind !== 'rectangle') return false;
+      applyBBox(fitted.bbox, list.length === 1 ? list[0].name : `${list.length} routes`);
+      return true;
+    },
+    [applyBBox],
+  );
+
+  const onUpload = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      setError(null);
+
+      const parsed: Route[] = [];
+      const failures: string[] = [];
+
+      for (const file of Array.from(files)) {
+        try {
+          parsed.push(...parseGpxText(await file.text(), file.name));
+        } catch (err) {
+          failures.push(err instanceof GpxParseError ? err.userMessage : String(err));
+        }
+      }
+
+      if (failures.length > 0) setError(failures.join(' '));
+      if (parsed.length === 0) return;
+
+      setRoutes((current) => {
+        const next = [...current, ...parsed];
+        if (current.length === 0) fitToRoutes(next);
+        return next;
+      });
+      setDirty(true);
+    },
+    [fitToRoutes],
+  );
+
+  const updateRoute = useCallback((id: string, patch: Partial<Route['style']>) => {
+    setRoutes((current) =>
+      current.map((r) => (r.id === id ? { ...r, style: { ...r.style, ...patch } } : r)),
+    );
+    setDirty(true);
+  }, []);
+
+  const removeRoute = useCallback((id: string) => {
+    setRoutes((current) => current.filter((r) => r.id !== id));
     setDirty(true);
   }, []);
 
@@ -73,10 +168,13 @@ export function App() {
   const onGenerate = useCallback(async () => {
     setError(null);
     setProgress({ stage: 'resolving', percent: 0, detail: 'Starting' });
-    builtSlug.current = preset.slug;
+    builtSlug.current = routes.length > 0 ? slugify(routes[0].name) : preset.slug;
 
     try {
-      const result = await generate(config, (p) => setProgress(p));
+      const result = await generate(
+        { config, routes: toSerialisable(routes), selectionRing: null },
+        (p) => setProgress(p),
+      );
       setBundle(result);
       setDirty(false);
     } catch (err) {
@@ -92,7 +190,7 @@ export function App() {
     } finally {
       setProgress(null);
     }
-  }, [config, preset.slug]);
+  }, [config, preset.slug, routes]);
 
   const onCancel = useCallback(() => {
     cancelGeneration();
@@ -144,10 +242,22 @@ export function App() {
 
       <div className="body">
         <aside className="panel">
+          <RoutePanel
+            routes={routes}
+            busy={busy}
+            onUpload={onUpload}
+            onUpdate={updateRoute}
+            onRemove={removeRoute}
+            onFit={() => fitToRoutes(routes)}
+          />
+
           <section>
             <h2>Selection</h2>
+            <p className="note">
+              Current area: <strong>{areaLabel}</strong>
+            </p>
             <label className="field__label" htmlFor="preset">
-              Area
+              Preset area
             </label>
             <select
               id="preset"
@@ -373,6 +483,16 @@ export function App() {
         Elevation: {DEM_DATASETS[config.dataset]?.attribution ?? ''}
       </footer>
     </div>
+  );
+}
+
+function slugify(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'route'
   );
 }
 

@@ -188,7 +188,12 @@ export function validateMesh(positions: Float32Array, indices: Uint32Array): Val
 
   const volume = signedVolume(positions, indices);
   const watertight = openEdges === 0;
-  const manifold = watertight && nonManifoldEdges === 0 && degenerateTriangles === 0;
+  // Manifoldness is topological: every edge shared by exactly two faces. A
+  // zero-area triangle carries three edges that pair up like any other face, so
+  // it does not break that, and slicers discard it. Counting slivers as
+  // non-manifold blocked export on solids that were genuinely watertight.
+  // They are still reported, and assemble() warns about them.
+  const manifold = watertight && nonManifoldEdges === 0;
 
   return {
     manifold,
@@ -215,25 +220,62 @@ export interface RepairedMesh {
 }
 
 /**
- * Weld, drop degenerates, then validate.
+ * Weld, then repair only if repair actually helps.
  *
- * Repair is attempted exactly once. If the result still is not manifold we
- * report it honestly rather than exporting something broken and hoping the
- * slicer copes.
+ * Deleting a zero-area triangle from a CLOSED mesh does not clean it up — it
+ * punches a hole. Each removed triangle leaves its three edges with one face
+ * instead of two, so a solid that was watertight comes back reporting 3n open
+ * edges. That is how a route with 78 sliver triangles reported exactly 234 open
+ * edges while being geometrically sound.
+ *
+ * Degenerate triangles are topologically harmless: they carry three edges that
+ * pair up like any other face, and slicers ignore them. So the welded mesh is
+ * validated first, degenerate removal is tried second, and whichever is more
+ * closed wins. Repair is attempted once and can never make the mesh worse than
+ * it arrived.
+ *
+ * See docs/08-pitfalls.md#repair-that-breaks-closure.
  */
+function brokenness(v: ValidationResult): number {
+  return v.openEdges + v.nonManifoldEdges;
+}
+
 export function repairAndValidate(
   positions: Float32Array,
   indices: Uint32Array,
 ): RepairedMesh {
   const welded = weldVertices(positions, indices);
+  const asWelded = validateMesh(welded.positions, welded.indices);
+
+  // Nothing to gain: a closed mesh stays closed, slivers and all.
+  if (brokenness(asWelded) === 0) {
+    return {
+      positions: welded.positions,
+      indices: welded.indices,
+      validation: asWelded,
+      merged: welded.merged,
+      removed: 0,
+    };
+  }
+
   const cleaned = removeDegenerates(welded.positions, welded.indices);
-  const validation = validateMesh(welded.positions, cleaned.indices);
+  const asCleaned = validateMesh(welded.positions, cleaned.indices);
+
+  if (brokenness(asCleaned) < brokenness(asWelded)) {
+    return {
+      positions: welded.positions,
+      indices: cleaned.indices,
+      validation: asCleaned,
+      merged: welded.merged,
+      removed: cleaned.removed,
+    };
+  }
 
   return {
     positions: welded.positions,
-    indices: cleaned.indices,
-    validation,
+    indices: welded.indices,
+    validation: asWelded,
     merged: welded.merged,
-    removed: cleaned.removed,
+    removed: 0,
   };
 }

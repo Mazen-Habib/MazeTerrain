@@ -160,3 +160,74 @@ describe('repairAndValidate', () => {
     expect(repaired.indices.length).toBe(mesh.indices.length);
   });
 });
+
+/**
+ * docs/08-pitfalls.md#repair-that-breaks-closure — a real Phase 1 failure: a
+ * route reported "234 open edge(s), 0 non-manifold edges" and blocked export.
+ * 234 = 78 x 3: the repair step deleted 78 sliver triangles from a mesh that
+ * was already closed, and each deletion left three edges with one face.
+ */
+describe('repair never breaks a closed mesh', () => {
+  /** A unit cube with an extra zero-area sliver welded into one face. */
+  function cubeWithSliver() {
+    const { positions, indices } = unitCube();
+
+    // Split the bottom face triangle (0,2,1) across a point exactly on edge 0-2,
+    // which produces one real triangle and one zero-area sliver.
+    const withPoint = new Float32Array(positions.length + 3);
+    withPoint.set(positions);
+    const m = positions.length / 3;
+    withPoint[positions.length] = 0.5;
+    withPoint[positions.length + 1] = 0.5;
+    withPoint[positions.length + 2] = 0;
+
+    const out: number[] = [];
+    for (let i = 0; i < indices.length; i += 3) {
+      if (indices[i] === 0 && indices[i + 1] === 2 && indices[i + 2] === 1) {
+        out.push(0, 2, m, 0, m, 1, 2, 1, m);
+      } else {
+        out.push(indices[i], indices[i + 1], indices[i + 2]);
+      }
+    }
+    return { positions: withPoint, indices: Uint32Array.from(out) };
+  }
+
+  it('keeps a closed mesh closed even when it contains slivers', () => {
+    const { positions, indices } = cubeWithSliver();
+
+    const before = validateMesh(positions, indices);
+    expect(before.watertight).toBe(true);
+
+    const repaired = repairAndValidate(positions, indices);
+    expect(repaired.validation.watertight).toBe(true);
+    expect(repaired.validation.openEdges).toBe(0);
+    // Deleting the sliver would have opened three edges, so it must be kept.
+    expect(repaired.removed).toBe(0);
+  });
+
+  it('treats a watertight mesh with slivers as manifold, so export is not blocked', () => {
+    const { positions, indices } = cubeWithSliver();
+    const v = validateMesh(positions, indices);
+    expect(v.nonManifoldEdges).toBe(0);
+    expect(v.manifold).toBe(true);
+  });
+
+  it('still reports the slivers rather than hiding them', () => {
+    const { positions, indices } = unitCube();
+    const withDegenerate = new Uint32Array(indices.length + 3);
+    withDegenerate.set(indices);
+    withDegenerate[indices.length] = 0;
+    withDegenerate[indices.length + 1] = 1;
+    withDegenerate[indices.length + 2] = 1;
+    expect(validateMesh(positions, withDegenerate).degenerateTriangles).toBe(1);
+  });
+
+  it('still repairs a mesh that degenerate removal genuinely helps', () => {
+    // A lone degenerate triangle floating free: removing it strictly improves things.
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]);
+    const indices = new Uint32Array([0, 1, 2]);
+    const repaired = repairAndValidate(positions, indices);
+    expect(repaired.removed).toBe(1);
+    expect(repaired.indices.length).toBe(0);
+  });
+});

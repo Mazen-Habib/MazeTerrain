@@ -13,10 +13,15 @@ import { chooseZoom, tileRangeForBBox } from '../data/dem/tiles';
 import { resolveGrid, resolveScale } from './coords';
 import { buildHeightfield, smoothHeightfield } from './heightfield';
 import { buildTerrainMesh } from './terrain';
-import { repairAndValidate } from './validate';
+import { repairAndValidate, validateMesh } from './validate';
+import { buildRouteSolid } from './route';
+import { selectionRingWorld, type SelectionShape } from './selection';
+import type { Route } from '../data/gpx/types';
 import type {
   GenerateConfig,
+  GenerateRequest,
   MeshBundle,
+  MeshPart,
   PrintWarning,
   ProgressCallback,
 } from './types';
@@ -27,13 +32,15 @@ const TERRAIN_COLOR = '#A0907A';
 const DEM_START = 5;
 const DEM_END = 45;
 const HEIGHTFIELD_END = 60;
-const TERRAIN_END = 90;
+const TERRAIN_END = 80;
+const ROUTES_END = 92;
 
 export async function assemble(
-  config: GenerateConfig,
+  request: GenerateRequest,
   onProgress?: ProgressCallback,
   signal?: AbortSignal,
 ): Promise<MeshBundle> {
+  const { config, routes, selectionRing } = request;
   const started = performance.now();
   const warnings: PrintWarning[] = [];
 
@@ -157,11 +164,104 @@ export async function assemble(
   const mesh = buildTerrainMesh(heightfield, scale);
   throwIfAborted();
 
+  // --- Stage 6: route solids ------------------------------------------------
+  const visibleRoutes = routes.filter((r) => r.style.visible);
+  const routeParts: MeshPart[] = [];
+
+  if (visibleRoutes.length > 0) {
+    report({
+      stage: 'building-routes',
+      percent: TERRAIN_END,
+      detail: `Embossing ${visibleRoutes.length} route(s)`,
+    });
+
+    const shape: SelectionShape | null = selectionRing
+      ? { kind: 'polygon', ring: selectionRing }
+      : null;
+    const ringWorld = shape ? selectionRingWorld(shape, scale.origin) : null;
+
+    for (let i = 0; i < visibleRoutes.length; i++) {
+      const record = visibleRoutes[i];
+      const built = buildRouteSolid(toRoute(record), {
+        heightfield,
+        scale,
+        selection: ringWorld,
+        nozzleDiameter_mm: config.nozzleDiameter_mm,
+        baseThickness_mm: config.baseThickness_mm,
+      });
+
+      if (built.stats.widthClamped) {
+        warnings.push({
+          level: 'warn',
+          code: 'route-width-clamped',
+          message:
+            `"${record.name}" was widened to ${built.stats.width_mm.toFixed(2)} mm — the minimum ` +
+            `for a ${config.nozzleDiameter_mm} mm nozzle. Below it the slicer drops the route ` +
+            `entirely.`,
+        });
+      }
+
+      if (built.stats.clippedLength_m > 1) {
+        warnings.push({
+          level: 'warn',
+          code: 'route-clipped',
+          message:
+            `"${record.name}" extends beyond your selection — ` +
+            `${(built.stats.clippedLength_m / 1000).toFixed(1)} km will be cut. ` +
+            `Use "Fit selection to routes" to include all of it.`,
+        });
+      }
+
+      if (built.mesh.triangles === 0) {
+        warnings.push({
+          level: 'warn',
+          code: 'route-empty',
+          message: `"${record.name}" produced no geometry — it may fall entirely outside the selection.`,
+        });
+        continue;
+      }
+
+      routeParts.push({
+        name: `route:${i}`,
+        color: record.style.color,
+        positions: built.mesh.positions,
+        indices: built.mesh.indices,
+        manifold: true,
+      });
+
+      report({
+        stage: 'building-routes',
+        percent: TERRAIN_END + ((ROUTES_END - TERRAIN_END) * (i + 1)) / visibleRoutes.length,
+        detail: `Route ${i + 1} of ${visibleRoutes.length}`,
+      });
+      throwIfAborted();
+    }
+  }
+
   // --- Stage 9: validate ----------------------------------------------------
-  report({ stage: 'validating', percent: TERRAIN_END, detail: 'Checking the mesh is watertight' });
+  report({ stage: 'validating', percent: ROUTES_END, detail: 'Checking the mesh is watertight' });
 
   const repaired = repairAndValidate(mesh.positions, mesh.indices);
   const validation = repaired.validation;
+
+  // Each route is validated as its own closed solid. In multicolour mode the
+  // parts stay separate and overlaps are expected — the route deliberately
+  // penetrates the terrain (docs/05-geometry-pipeline.md Stage 7).
+  for (const part of routeParts) {
+    const check = repairAndValidate(part.positions, part.indices);
+    part.positions = check.positions;
+    part.indices = check.indices;
+    part.manifold = check.validation.manifold;
+    if (!check.validation.manifold) {
+      warnings.push({
+        level: 'fail',
+        code: 'route-not-manifold',
+        message:
+          `${part.name} is not manifold: ${check.validation.openEdges} open edge(s), ` +
+          `${check.validation.nonManifoldEdges} non-manifold edge(s). Export is blocked.`,
+      });
+    }
+  }
 
   if (!validation.manifold) {
     warnings.push({
@@ -181,22 +281,43 @@ export async function assemble(
     });
   }
 
-  const triangles = repaired.indices.length / 3;
+  const slivers =
+    validation.degenerateTriangles +
+    routeParts.reduce((n, part) => n + countDegenerates(part), 0);
+  if (slivers > 0) {
+    warnings.push({
+      level: 'warn',
+      code: 'degenerate-triangles',
+      message:
+        `${slivers} zero-area triangle(s) in the mesh. Slicers discard these, and the solid ` +
+        `is still watertight, but they are a sign the footprint had slivers.`,
+    });
+  }
+
+  const terrainPart: MeshPart = {
+    name: 'terrain',
+    color: TERRAIN_COLOR,
+    positions: repaired.positions,
+    indices: repaired.indices,
+    manifold: validation.manifold,
+  };
+
+  const parts = [terrainPart, ...routeParts];
+
+  let triangles = 0;
+  let vertices = 0;
+  for (const part of parts) {
+    triangles += part.indices.length / 3;
+    vertices += part.positions.length / 3;
+  }
+
   warnings.push(...printChecks(config, mesh.dimensions_mm, triangles));
 
   const bundle: MeshBundle = {
-    parts: [
-      {
-        name: 'terrain',
-        color: TERRAIN_COLOR,
-        positions: repaired.positions,
-        indices: repaired.indices,
-        manifold: validation.manifold,
-      },
-    ],
+    parts,
     stats: {
       triangles,
-      vertices: repaired.positions.length / 3,
+      vertices,
       dimensions_mm: mesh.dimensions_mm,
       extent_km: [scale.extentX_m / 1000, scale.extentY_m / 1000],
       elevationRange_m: [heightfield.min_m, heightfield.max_m],
@@ -213,6 +334,31 @@ export async function assemble(
 
   report({ stage: 'done', percent: 100, detail: 'Done' });
   return bundle;
+}
+
+function countDegenerates(part: MeshPart): number {
+  return validateMesh(part.positions, part.indices).degenerateTriangles;
+}
+
+/** Rehydrate a worker-transferred route record into the shape the builder wants. */
+function toRoute(record: GenerateRequest['routes'][number]): Route {
+  return {
+    id: record.id,
+    name: record.name,
+    points: record.points,
+    distance_m: 0,
+    elevationGain_m: null,
+    bbox: { west: 0, south: 0, east: 0, north: 0 },
+    style: {
+      color: record.style.color,
+      width_mm: record.style.width_mm,
+      height_mm: record.style.height_mm,
+      profile: 'raised',
+      elevationSource: record.style.elevationSource,
+      demBlend: record.style.demBlend,
+      visible: record.style.visible,
+    },
+  };
 }
 
 /**

@@ -217,6 +217,117 @@ body {
   font-size: 12.5px;
 }
 
+.btn--wide {
+  display: block;
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.dropzone {
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.dropzone--active {
+  border-color: var(--accent);
+  background: rgba(255, 122, 69, 0.08);
+}
+
+.dropzone .field__hint {
+  margin-top: 6px;
+}
+
+.routes {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.route {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  margin-bottom: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.route--selected {
+  border-color: var(--accent);
+}
+
+.route__swatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 2px;
+}
+
+.route__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.route__name {
+  display: block;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route__meta {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.route__toggle,
+.route__remove {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.route__toggle:hover,
+.route__remove:hover {
+  color: var(--text);
+}
+
+.route__editor {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.route__editorTitle {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.colorInput {
+  width: 100%;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
 .badge {
   margin-left: 6px;
   padding: 1px 6px;

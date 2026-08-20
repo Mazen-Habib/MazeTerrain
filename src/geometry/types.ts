@@ -103,11 +103,37 @@ export interface GenerateConfig {
   nozzleDiameter_mm: number;
 }
 
+/** Config plus the routes to emboss. Kept separate so GenerateConfig stays serialisable-small. */
+export interface GenerateRequest {
+  config: GenerateConfig;
+  /** Serialisable route records. Empty means terrain only, as in Phase 0. */
+  routes: SerialisableRoute[];
+  /** Selection outline in lon/lat, or null for the plain bbox rectangle. */
+  selectionRing: Array<[number, number]> | null;
+}
+
+/** The subset of Route the worker needs — no React state, no functions. */
+export interface SerialisableRoute {
+  id: string;
+  name: string;
+  points: Array<{ lon: number; lat: number; ele?: number; t?: number }>;
+  style: {
+    color: string;
+    width_mm: number;
+    height_mm: number;
+    profile: string;
+    elevationSource: 'dem' | 'gpx' | 'flat';
+    demBlend: number;
+    visible: boolean;
+  };
+}
+
 export type ProgressStage =
   | 'resolving'
   | 'fetching-dem'
   | 'building-heightfield'
   | 'building-terrain'
+  | 'building-routes'
   | 'validating'
   | 'done';
 

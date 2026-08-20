@@ -7,7 +7,7 @@
  */
 import * as Comlink from 'comlink';
 import { assemble } from '../geometry/assemble';
-import type { GenerateConfig, MeshBundle, ProgressCallback } from '../geometry/types';
+import type { GenerateRequest, MeshBundle, ProgressCallback } from '../geometry/types';
 
 let controller: AbortController | null = null;
 
@@ -25,10 +25,10 @@ function transferables(bundle: MeshBundle): Transferable[] {
 }
 
 const api = {
-  async generate(config: GenerateConfig, onProgress: ProgressCallback): Promise<MeshBundle> {
+  async generate(request: GenerateRequest, onProgress: ProgressCallback): Promise<MeshBundle> {
     controller = new AbortController();
     try {
-      const bundle = await assemble(config, onProgress, controller.signal);
+      const bundle = await assemble(request, onProgress, controller.signal);
       return Comlink.transfer(bundle, transferables(bundle));
     } finally {
       controller = null;
