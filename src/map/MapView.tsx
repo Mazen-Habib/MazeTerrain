@@ -10,7 +10,7 @@ import * as maplibregl from 'maplibre-gl';
 import type { MapMouseEvent } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Route } from '../data/gpx/types';
-import type { SelectionShape } from '../geometry/selection';
+import { selectionBBox, type SelectionShape } from '../geometry/selection';
 import { BASEMAPS, demSource } from './basemaps';
 import {
   finishPolygon,
@@ -28,6 +28,8 @@ const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: 
 
 interface MapViewProps {
   basemapId: string;
+  /** Bumped when the selection was set from outside the map and the view should follow. */
+  fitNonce: number;
   datasetId: string;
   terrain3d: boolean;
   shape: SelectionShape | null;
@@ -47,6 +49,7 @@ type Interaction =
 
 export function MapView({
   basemapId,
+  fitNonce,
   datasetId,
   terrain3d,
   shape,
@@ -78,12 +81,24 @@ export function MapView({
 
     if (!m.getSource('dem')) {
       m.addSource('dem', demSource(datasetId));
-      m.addLayer({
-        id: 'hillshade',
-        type: 'hillshade',
-        source: 'dem',
-        paint: { 'hillshade-exaggeration': 0.35 },
-      });
+
+      // Insert the hillshade UNDER the basemap's roads and labels. addLayer with
+      // no beforeId puts a layer on top of everything, and a hillshade stretched
+      // over the whole style renders as a uniform pale wash that hides the map
+      // completely — it looks exactly like a basemap that failed to load.
+      const firstLineLayer = (m.getStyle()?.layers ?? []).find(
+        (l) => l.type === 'line' || l.type === 'symbol',
+      )?.id;
+
+      m.addLayer(
+        {
+          id: 'hillshade',
+          type: 'hillshade',
+          source: 'dem',
+          paint: { 'hillshade-exaggeration': 0.3 },
+        },
+        firstLineLayer,
+      );
     }
 
     for (const [id, data] of [
@@ -154,6 +169,16 @@ export function MapView({
       attributionControl: { compact: false },
     });
     map.current = m;
+
+    if (import.meta.env.DEV) {
+      (window as unknown as { __map?: maplibregl.Map }).__map = m;
+    }
+
+    // A basemap that fails to load is currently a silent white rectangle. Say so.
+    m.on('error', (e) => {
+      // eslint-disable-next-line no-console
+      console.error('[map]', e.error?.message ?? e);
+    });
 
     m.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
     m.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
@@ -267,10 +292,14 @@ export function MapView({
     return () => window.removeEventListener('keydown', onKey);
   }, [setData]);
 
+  const mountedBasemap = useRef(basemapId);
   useEffect(() => {
     const m = map.current;
     const style = BASEMAPS.find((b) => b.id === basemapId);
-    if (!m || !style) return;
+    // Skip the first run: the map was constructed with this style already, and
+    // calling setStyle straight after construction aborts the load in flight.
+    if (!m || !style || mountedBasemap.current === basemapId) return;
+    mountedBasemap.current = basemapId;
     ready.current = false;
     m.setStyle(style.styleUrl);
   }, [basemapId]);
@@ -330,10 +359,17 @@ export function MapView({
     m.getCanvas().style.cursor = tool ? 'crosshair' : '';
   }, [tool]);
 
-  return <div className="mapview" ref={container} />;
-}
+  // Presets and Fit-to-routes change the selection without touching the map, so
+  // the view has to be told to go there — otherwise the shape is drawn somewhere
+  // off screen and the map looks empty.
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !shape) return;
+    const box = selectionBBox(shape);
+    m.fitBounds([box.west, box.south, box.east, box.north], { padding: 60, duration: 800 });
+    // Only when the nonce changes; shape edits from dragging must not re-frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitNonce]);
 
-/** Fly the map to a bounding box. Exposed so "Fit to routes" can move the view too. */
-export function fitBoundsOn(m: maplibregl.Map | null, bbox: [number, number, number, number]) {
-  m?.fitBounds(bbox, { padding: 48, duration: 700 });
+  return <div className="mapview" ref={container} />;
 }

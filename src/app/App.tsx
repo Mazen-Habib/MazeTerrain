@@ -100,6 +100,7 @@ export function App() {
   const [shading, setShading] = useState<ShadingMode>('natural');
   const [autoSpin, setAutoSpin] = useState(false);
   const [cursor, setCursor] = useState<LonLat | null>(null);
+  const [fitNonce, setFitNonce] = useState(0);
 
   const [settings, setSettings] = useState<Omit<GenerateConfig, 'bbox'>>(() => {
     const { bbox: _bbox, ...rest } = defaultConfig(PRESETS[0].bbox);
@@ -126,16 +127,20 @@ export function App() {
     setDirty(true);
   }, []);
 
-  const applyShape = useCallback((next: SelectionShape, label?: string) => {
-    setShape(next);
-    if (label) setAreaLabel(label);
-    setDirty(true);
-  }, []);
+  const applyShape = useCallback(
+    (next: SelectionShape, label?: string, moveMap = false) => {
+      setShape(next);
+      if (label) setAreaLabel(label);
+      if (moveMap) setFitNonce((n) => n + 1);
+      setDirty(true);
+    },
+    [],
+  );
 
   const onPreset = useCallback(
     (id: string) => {
       const next = PRESETS.find((p) => p.id === id);
-      if (next) applyShape({ kind: 'rectangle', bbox: next.bbox }, next.label);
+      if (next) applyShape({ kind: 'rectangle', bbox: next.bbox }, next.label, true);
     },
     [applyShape],
   );
@@ -144,7 +149,9 @@ export function App() {
   const fitToRoutes = useCallback(
     (list: Route[]) => {
       const fitted = fitSelectionToRoutes(list);
-      if (fitted) applyShape(fitted, list.length === 1 ? list[0].name : `${list.length} routes`);
+      if (fitted) {
+        applyShape(fitted, list.length === 1 ? list[0].name : `${list.length} routes`, true);
+      }
     },
     [applyShape],
   );
@@ -317,8 +324,11 @@ export function App() {
               className="select"
               onChange={(e) => onPreset(e.target.value)}
               disabled={busy}
-              defaultValue={PRESETS[0].id}
+              value=""
             >
+              <option value="" disabled>
+                Pick an area…
+              </option>
               {PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.label}
@@ -524,6 +534,7 @@ export function App() {
           <div className={view === 'map' ? 'stage' : 'stage stage--hidden'}>
             <MapView
               basemapId={basemapId}
+              fitNonce={fitNonce}
               datasetId={config.dataset}
               terrain3d={terrain3d}
               shape={shape}
