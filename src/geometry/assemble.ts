@@ -13,6 +13,7 @@ import { chooseZoom, tileRangeForBBox } from '../data/dem/tiles';
 import { resolveGrid, resolveScale } from './coords';
 import { buildHeightfield, smoothHeightfield } from './heightfield';
 import { buildTerrainMesh } from './terrain';
+import { buildClippedTerrainMesh } from './terrainClip';
 import { repairAndValidate, validateMesh } from './validate';
 import { buildRouteSolid } from './route';
 import { selectionRingWorld, type SelectionShape } from './selection';
@@ -161,7 +162,18 @@ export async function assemble(
     });
   }
 
-  const mesh = buildTerrainMesh(heightfield, scale);
+  // A selection ring means the model is a circle, hexagon or freehand polygon,
+  // and the terrain has to be clipped to it — surface, walls and base alike
+  // (docs/08-pitfalls.md#geometry-outside-boundary). Without one the selection
+  // is the bbox rectangle and the whole grid is the model.
+  const shape: SelectionShape | null = selectionRing
+    ? { kind: 'polygon', ring: selectionRing }
+    : null;
+  const ringWorld = shape ? selectionRingWorld(shape, scale.origin) : null;
+
+  const mesh = ringWorld
+    ? buildClippedTerrainMesh(heightfield, scale, ringWorld)
+    : buildTerrainMesh(heightfield, scale);
   throwIfAborted();
 
   // --- Stage 6: route solids ------------------------------------------------
@@ -174,11 +186,6 @@ export async function assemble(
       percent: TERRAIN_END,
       detail: `Embossing ${visibleRoutes.length} route(s)`,
     });
-
-    const shape: SelectionShape | null = selectionRing
-      ? { kind: 'polygon', ring: selectionRing }
-      : null;
-    const ringWorld = shape ? selectionRingWorld(shape, scale.origin) : null;
 
     for (let i = 0; i < visibleRoutes.length; i++) {
       const record = visibleRoutes[i];
