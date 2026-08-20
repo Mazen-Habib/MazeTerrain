@@ -6,7 +6,7 @@
  * 7 (boolean assembly) arrive in Phases 1-3 and slot in between
  * `building-heightfield` and `building-terrain` without changing this contract.
  */
-import { buildMosaic } from '../data/dem/fetchTiles';
+import { buildMosaic, TileFetchError } from '../data/dem/fetchTiles';
 import { getDataset } from '../data/dem/datasets';
 import { inpaintNoData } from '../data/dem/sampler';
 import { chooseZoom, tileRangeForBBox } from '../data/dem/tiles';
@@ -35,6 +35,9 @@ const DEM_END = 45;
 const HEIGHTFIELD_END = 60;
 const TERRAIN_END = 80;
 const ROUTES_END = 92;
+
+/** Never drop below this looking for coverage; the model would be meaningless. */
+const MIN_DEM_ZOOM = 6;
 
 export async function assemble(
   request: GenerateRequest,
@@ -80,35 +83,89 @@ export async function assemble(
 
   // --- Stage 1: fetch DEM ---------------------------------------------------
   const centreLat = grid.origin.lat0;
-  const zoom = chooseZoom(grid.resolution_m, centreLat, dataset.tileSize, dataset.maxZoom);
-  const range = tileRangeForBBox(
+
+  // Coverage is zoom-dependent by region. Mapterhorn serves z14 over
+  // Switzerland, where swissALTI3D exists, and 404s at z14 over Pakistan while
+  // serving z12 there happily. Asking for a zoom the region does not have
+  // returns nothing but NoData, which the inpainter then flattens to zero — a
+  // blank plate reported as a healthy watertight model.
+  // See docs/08-pitfalls.md#dem-zoom-beyond-coverage.
+  let zoom = chooseZoom(grid.resolution_m, centreLat, dataset.tileSize, dataset.maxZoom);
+  let range = tileRangeForBBox(
     config.bbox.west,
     config.bbox.south,
     config.bbox.east,
     config.bbox.north,
     zoom,
   );
-  const tileTotal = range.nx * range.ny;
 
   report({
     stage: 'fetching-dem',
     percent: DEM_START,
-    detail: `Fetching ${tileTotal} elevation tiles at zoom ${zoom}`,
+    detail: `Fetching ${range.nx * range.ny} elevation tiles at zoom ${zoom}`,
   });
 
-  const mosaic = await buildMosaic(
-    dataset,
-    range,
-    (done, total) => {
-      report({
-        stage: 'fetching-dem',
-        percent: DEM_START + ((DEM_END - DEM_START) * done) / total,
-        detail: `Elevation tile ${done} of ${total}`,
-      });
-    },
-    signal,
-  );
+  const onTile = (done: number, total: number) => {
+    report({
+      stage: 'fetching-dem',
+      percent: DEM_START + ((DEM_END - DEM_START) * done) / total,
+      detail: `Elevation tile ${done} of ${total}`,
+    });
+  };
+
+  let fetched = await buildMosaic(dataset, range, onTile, signal);
   throwIfAborted();
+
+  let droppedZoom = false;
+  while (fetched.missingTiles === fetched.totalTiles && zoom > MIN_DEM_ZOOM) {
+    zoom--;
+    droppedZoom = true;
+    range = tileRangeForBBox(
+      config.bbox.west,
+      config.bbox.south,
+      config.bbox.east,
+      config.bbox.north,
+      zoom,
+    );
+    report({
+      stage: 'fetching-dem',
+      percent: DEM_START,
+      detail: `No coverage at that detail — retrying at zoom ${zoom}`,
+    });
+    fetched = await buildMosaic(dataset, range, onTile, signal);
+    throwIfAborted();
+  }
+
+  if (fetched.missingTiles === fetched.totalTiles) {
+    throw new TileFetchError(
+      `No DEM coverage for bbox at any zoom down to ${MIN_DEM_ZOOM}`,
+      `${dataset.label} has no elevation data for this area. Try the other ` +
+        `elevation dataset, or pick a different location.`,
+    );
+  }
+
+  if (droppedZoom) {
+    warnings.push({
+      level: 'warn',
+      code: 'dem-zoom-reduced',
+      message:
+        `${dataset.label} has no tiles at the detail this selection asked for, so a ` +
+        `coarser zoom (${zoom}) was used. The relief is real but softer than the ` +
+        `sampling step suggests.`,
+    });
+  }
+
+  if (fetched.missingTiles > 0) {
+    warnings.push({
+      level: 'warn',
+      code: 'dem-partial-coverage',
+      message:
+        `${fetched.missingTiles} of ${fetched.totalTiles} elevation tiles were missing and ` +
+        `have been interpolated from their neighbours.`,
+    });
+  }
+
+  const mosaic = fetched.mosaic;
 
   // --- Stage 1b: heightfield ------------------------------------------------
   report({

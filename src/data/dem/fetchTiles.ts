@@ -61,17 +61,23 @@ async function decodeTile(blob: Blob, dataset: DemDataset): Promise<Float32Array
   }
 }
 
+export interface TileResult {
+  elevations: Float32Array;
+  /** True when the server has no tile here — a coverage gap, not an error. */
+  missing: boolean;
+}
+
 async function fetchOneTile(
   dataset: DemDataset,
   z: number,
   x: number,
   y: number,
   signal: AbortSignal | undefined,
-): Promise<Float32Array> {
+): Promise<TileResult> {
   const key = tileKey(dataset.id, z, x, y);
 
   const cached = await readTile(key);
-  if (cached) return cached;
+  if (cached) return { elevations: cached, missing: false };
 
   const url = tileUrl(dataset.urlTemplate, z, x, y);
   let lastError: unknown;
@@ -101,9 +107,12 @@ async function fetchOneTile(
       }
 
       if (res.status === 404 || res.status === 204) {
-        // A genuine gap in coverage. Hand back NoData and let the inpainter deal
-        // with it rather than failing the whole build.
-        return new Float32Array(dataset.tileSize * dataset.tileSize).fill(-32768);
+        // A genuine gap in coverage. Hand back NoData and report it, so the
+        // caller can decide whether a lower zoom would have data.
+        return {
+          elevations: new Float32Array(dataset.tileSize * dataset.tileSize).fill(-32768),
+          missing: true,
+        };
       }
 
       if (!res.ok) {
@@ -117,7 +126,7 @@ async function fetchOneTile(
 
       const elevations = await decodeTile(await res.blob(), dataset);
       void writeTile(key, elevations);
-      return elevations;
+      return { elevations, missing: false };
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') throw err;
       if (err instanceof TileFetchError && err.status !== undefined) throw err;
@@ -141,12 +150,19 @@ async function fetchOneTile(
  * The range already carries a one-tile margin so the bilinear sampler has
  * neighbours at the selection edge.
  */
+export interface MosaicResult {
+  mosaic: Mosaic;
+  /** Tiles the server had no data for. */
+  missingTiles: number;
+  totalTiles: number;
+}
+
 export async function buildMosaic(
   dataset: DemDataset,
   range: TileRange,
   onTile?: (done: number, total: number) => void,
   signal?: AbortSignal,
-): Promise<Mosaic> {
+): Promise<MosaicResult> {
   const { z, xMin, yMin, nx, ny } = range;
   const ts = dataset.tileSize;
 
@@ -164,6 +180,7 @@ export async function buildMosaic(
   const total = jobs.length;
   let done = 0;
   let next = 0;
+  let missingTiles = 0;
 
   async function worker(): Promise<void> {
     for (;;) {
@@ -171,7 +188,8 @@ export async function buildMosaic(
       if (i >= jobs.length) return;
       const job = jobs[i];
 
-      const elevations = await fetchOneTile(dataset, z, job.x, job.y, signal);
+      const { elevations, missing } = await fetchOneTile(dataset, z, job.x, job.y, signal);
+      if (missing) missingTiles++;
 
       // Blit into the mosaic. Row by row, no spreads — a 512px tile is 262 144
       // values and `set(...)` with spread arguments blows the call stack
@@ -194,12 +212,16 @@ export async function buildMosaic(
   await Promise.all(pool);
 
   return {
-    data,
-    width,
-    height,
-    z,
-    tileSize: ts,
-    originPxX: xMin * ts,
-    originPxY: yMin * ts,
+    mosaic: {
+      data,
+      width,
+      height,
+      z,
+      tileSize: ts,
+      originPxX: xMin * ts,
+      originPxY: yMin * ts,
+    },
+    missingTiles,
+    totalTiles: total,
   };
 }
