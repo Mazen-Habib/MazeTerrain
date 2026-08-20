@@ -1,11 +1,15 @@
 /**
- * Phase 0 shell.
+ * Phase 1 shell: map, selection tools, routes, 3D preview, export.
  *
- * Deliberately not the app from docs/07-ui-spec.md — there is no map and no 3D
- * preview yet, because Phase 0 exists to prove the geometry, not to look like
- * the product. What it does implement from that spec is the part that is easy to
- * get wrong later: the named-stage progress checklist, a cancel that actually
- * cancels, and the dirty state that stops settings changes triggering rebuilds.
+ * Layout follows docs/07-ui-spec.md — settings left, viewport right, shape
+ * tools pinned top-right of the viewport, status strip along the bottom, and a
+ * Map / 3D Model toggle that switches views of one project rather than two
+ * modes with separate state.
+ *
+ * State lives in React rather than the zustand stores docs/03-architecture.md
+ * proposes. It is all owned here and passed down one level; introducing a store
+ * mid-phase would be a refactor with no user-visible payoff. Worth revisiting
+ * when Phase 2 adds forty layer controls.
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { DEM_DATASETS } from '../data/dem/datasets';
@@ -13,16 +17,19 @@ import { defaultConfig, PRESETS } from '../config/presets';
 import { GpxParseError, parseGpxText } from '../data/gpx/parse';
 import type { Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
-import { resolveGrid } from '../geometry/coords';
-import { fitSelectionToRoutes } from '../geometry/selection';
-import type {
-  BBox,
-  GenerateConfig,
-  MeshBundle,
-  Progress,
-  ProgressStage,
-  SerialisableRoute,
-} from '../geometry/types';
+import { bboxCentre, resolveGrid } from '../geometry/coords';
+import {
+  fitSelectionToRoutes,
+  selectionArea_km2,
+  selectionBBox,
+  selectionRingLonLat,
+  type SelectionShape,
+} from '../geometry/selection';
+import type { GenerateConfig, MeshBundle, Progress, ProgressStage, SerialisableRoute } from '../geometry/types';
+import { BASEMAPS } from '../map/basemaps';
+import type { DrawTool, LonLat } from '../map/draw';
+import { MapView } from '../map/MapView';
+import { Viewer, type ShadingMode } from '../preview/Viewer';
 import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
@@ -46,74 +53,100 @@ const STAGE_ORDER: ProgressStage[] = [
   'done',
 ];
 
+const TOOLS: Array<{ id: DrawTool; label: string; glyph: string }> = [
+  { id: 'rectangle', label: 'Rectangle', glyph: '▭' },
+  { id: 'square', label: 'Square', glyph: '◻' },
+  { id: 'circle', label: 'Circle', glyph: '◯' },
+  { id: 'hexagon', label: 'Hexagon', glyph: '⬡' },
+  { id: 'polygon', label: 'Polygon', glyph: '⬠' },
+];
+
+const SHADING: Array<{ id: ShadingMode; label: string }> = [
+  { id: 'natural', label: 'Natural' },
+  { id: 'elevation', label: 'Elevation' },
+  { id: 'slope', label: 'Slope' },
+  { id: 'wireframe', label: 'Wireframe' },
+];
+
 function toSerialisable(routes: Route[]): SerialisableRoute[] {
   return routes.map((r) => ({
     id: r.id,
     name: r.name,
     points: r.points,
-    style: {
-      color: r.style.color,
-      width_mm: r.style.width_mm,
-      height_mm: r.style.height_mm,
-      profile: r.style.profile,
-      elevationSource: r.style.elevationSource,
-      demBlend: r.style.demBlend,
-      visible: r.style.visible,
-    },
+    style: { ...r.style },
   }));
 }
 
-export function App() {
-  const [presetId, setPresetId] = useState(PRESETS[0].id);
-  const preset = useMemo(() => PRESETS.find((p) => p.id === presetId) ?? PRESETS[0], [presetId]);
+function slugify(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'model'
+  );
+}
 
-  const [config, setConfig] = useState<GenerateConfig>(() => defaultConfig(PRESETS[0].bbox));
+export function App() {
+  const [shape, setShape] = useState<SelectionShape>(() => ({
+    kind: 'rectangle',
+    bbox: PRESETS[0].bbox,
+  }));
+  const [areaLabel, setAreaLabel] = useState(PRESETS[0].label);
+  const [tool, setTool] = useState<DrawTool | null>(null);
+  const [basemapId, setBasemapId] = useState(BASEMAPS[0].id);
+  const [terrain3d, setTerrain3d] = useState(false);
+  const [view, setView] = useState<'map' | '3d'>('map');
+  const [shading, setShading] = useState<ShadingMode>('natural');
+  const [autoSpin, setAutoSpin] = useState(false);
+  const [cursor, setCursor] = useState<LonLat | null>(null);
+
+  const [settings, setSettings] = useState<Omit<GenerateConfig, 'bbox'>>(() => {
+    const { bbox: _bbox, ...rest } = defaultConfig(PRESETS[0].bbox);
+    return rest;
+  });
   const [autoResolution, setAutoResolution] = useState(true);
   const [routes, setRoutes] = useState<Route[]>([]);
-  const [areaLabel, setAreaLabel] = useState(PRESETS[0].label);
 
   const [progress, setProgress] = useState<Progress | null>(null);
   const [bundle, setBundle] = useState<MeshBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty] = useState(true);
 
   const busy = progress !== null;
-  const builtSlug = useRef(preset.slug);
+  const builtSlug = useRef('model');
 
-  /** Any settings change marks the model dirty. It never triggers a rebuild. */
-  const update = useCallback((patch: Partial<GenerateConfig>) => {
-    setConfig((c) => ({ ...c, ...patch }));
+  const config: GenerateConfig = useMemo(
+    () => ({ ...settings, bbox: selectionBBox(shape) }),
+    [settings, shape],
+  );
+
+  const update = useCallback((patch: Partial<Omit<GenerateConfig, 'bbox'>>) => {
+    setSettings((c) => ({ ...c, ...patch }));
     setDirty(true);
   }, []);
 
-  const onPreset = useCallback((id: string) => {
-    const next = PRESETS.find((p) => p.id === id);
-    if (!next) return;
-    setPresetId(id);
-    setAreaLabel(next.label);
-    setConfig((c) => ({ ...c, bbox: next.bbox }));
+  const applyShape = useCallback((next: SelectionShape, label?: string) => {
+    setShape(next);
+    if (label) setAreaLabel(label);
     setDirty(true);
   }, []);
 
-  const applyBBox = useCallback((bbox: BBox, label: string) => {
-    setConfig((c) => ({ ...c, bbox }));
-    setAreaLabel(label);
-    setDirty(true);
-  }, []);
+  const onPreset = useCallback(
+    (id: string) => {
+      const next = PRESETS.find((p) => p.id === id);
+      if (next) applyShape({ kind: 'rectangle', bbox: next.bbox }, next.label);
+    },
+    [applyShape],
+  );
 
-  /**
-   * Fit the selection to the routes. The roadmap calls this "the primary
-   * first-run path", so it also runs automatically on the first upload —
-   * the user should see something already working before touching a control.
-   */
+  /** The primary first-run path: upload a GPX and the selection is already right. */
   const fitToRoutes = useCallback(
     (list: Route[]) => {
       const fitted = fitSelectionToRoutes(list);
-      if (fitted?.kind !== 'rectangle') return false;
-      applyBBox(fitted.bbox, list.length === 1 ? list[0].name : `${list.length} routes`);
-      return true;
+      if (fitted) applyShape(fitted, list.length === 1 ? list[0].name : `${list.length} routes`);
     },
-    [applyBBox],
+    [applyShape],
   );
 
   const onUpload = useCallback(
@@ -123,7 +156,6 @@ export function App() {
 
       const parsed: Route[] = [];
       const failures: string[] = [];
-
       for (const file of Array.from(files)) {
         try {
           parsed.push(...parseGpxText(await file.text(), file.name));
@@ -146,14 +178,12 @@ export function App() {
   );
 
   const updateRoute = useCallback((id: string, patch: Partial<Route['style']>) => {
-    setRoutes((current) =>
-      current.map((r) => (r.id === id ? { ...r, style: { ...r.style, ...patch } } : r)),
-    );
+    setRoutes((c) => c.map((r) => (r.id === id ? { ...r, style: { ...r.style, ...patch } } : r)));
     setDirty(true);
   }, []);
 
   const removeRoute = useCallback((id: string) => {
-    setRoutes((current) => current.filter((r) => r.id !== id));
+    setRoutes((c) => c.filter((r) => r.id !== id));
     setDirty(true);
   }, []);
 
@@ -165,18 +195,27 @@ export function App() {
     }
   }, [config]);
 
+  const area_km2 = useMemo(
+    () => selectionArea_km2(shape, bboxCentre(selectionBBox(shape))),
+    [shape],
+  );
+
   const onGenerate = useCallback(async () => {
     setError(null);
     setProgress({ stage: 'resolving', percent: 0, detail: 'Starting' });
-    builtSlug.current = routes.length > 0 ? slugify(routes[0].name) : preset.slug;
+    builtSlug.current = slugify(routes.length > 0 ? routes[0].name : areaLabel);
 
     try {
+      // A rectangle IS its bounding box, so it needs no clipping pass. Anything
+      // else has to be clipped or the model exports as the bbox rectangle.
+      const ring = shape.kind === 'rectangle' ? null : selectionRingLonLat(shape);
       const result = await generate(
-        { config, routes: toSerialisable(routes), selectionRing: null },
+        { config, routes: toSerialisable(routes), selectionRing: ring },
         (p) => setProgress(p),
       );
       setBundle(result);
       setDirty(false);
+      setView('3d');
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         setError('Generation cancelled.');
@@ -190,12 +229,10 @@ export function App() {
     } finally {
       setProgress(null);
     }
-  }, [config, preset.slug, routes]);
+  }, [config, routes, shape, areaLabel]);
 
   const onCancel = useCallback(() => {
     cancelGeneration();
-    // The triangulation loop is synchronous and cannot observe the abort flag,
-    // so guarantee the escape by tearing the worker down.
     terminateWorker();
     setProgress(null);
     setError('Generation cancelled.');
@@ -205,33 +242,49 @@ export function App() {
 
   const onDownload = useCallback(() => {
     if (!bundle || blocked) return;
-    const buffer = writeBinarySTL(bundle.parts, stlHeader());
-    const blob = new Blob([buffer], { type: 'model/stl' });
+    const blob = new Blob([writeBinarySTL(bundle.parts, stlHeader())], { type: 'model/stl' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = stlFilename(builtSlug.current, config.modelWidth_mm);
-    // The anchor must be in the document for Firefox, and the object URL must
-    // outlive the click — revoking synchronously cancels the download of a
-    // 30 MB blob before the browser has finished reading it.
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }, [bundle, blocked, config.modelWidth_mm]);
 
+  const dataset = DEM_DATASETS[config.dataset];
+
   return (
     <div className="layout">
       <header className="topbar">
         <h1>
-          MazeTerrain <span className="topbar__phase">Phase 0</span>
+          MazeTerrain <span className="topbar__phase">Phase 1</span>
         </h1>
-        <div className="topbar__actions">
+
+        <div className="viewtoggle" role="tablist">
           <button
-            className={`btn${dirty || !bundle ? ' btn--accent' : ''}`}
-            onClick={onGenerate}
-            disabled={busy}
+            role="tab"
+            aria-selected={view === 'map'}
+            className={view === 'map' ? 'viewtoggle__on' : ''}
+            onClick={() => setView('map')}
           >
+            Map
+          </button>
+          <button
+            role="tab"
+            aria-selected={view === '3d'}
+            className={view === '3d' ? 'viewtoggle__on' : ''}
+            onClick={() => setView('3d')}
+            disabled={!bundle}
+          >
+            3D Model
+          </button>
+        </div>
+
+        <div className="topbar__actions">
+          {bundle && !dirty ? <span className="badge badge--ok">Up to date</span> : null}
+          <button className={`btn${dirty ? ' btn--accent' : ''}`} onClick={onGenerate} disabled={busy}>
             {busy ? 'Generating…' : 'Generate'}
           </button>
           <button className="btn" onClick={onDownload} disabled={!bundle || blocked || busy}>
@@ -254,17 +307,17 @@ export function App() {
           <section>
             <h2>Selection</h2>
             <p className="note">
-              Current area: <strong>{areaLabel}</strong>
+              Current area: <strong>{areaLabel}</strong> · {area_km2.toFixed(1)} km²
             </p>
             <label className="field__label" htmlFor="preset">
-              Preset area
+              Jump to
             </label>
             <select
               id="preset"
               className="select"
-              value={presetId}
               onChange={(e) => onPreset(e.target.value)}
               disabled={busy}
+              defaultValue={PRESETS[0].id}
             >
               {PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -272,7 +325,30 @@ export function App() {
                 </option>
               ))}
             </select>
-            <p className="note">{preset.note}</p>
+
+            <label className="field__label" htmlFor="basemap">
+              Basemap
+            </label>
+            <select
+              id="basemap"
+              className="select"
+              value={basemapId}
+              onChange={(e) => setBasemapId(e.target.value)}
+            >
+              {BASEMAPS.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={terrain3d}
+                onChange={(e) => setTerrain3d(e.target.checked)}
+              />
+              Live 3D terrain on the map
+            </label>
 
             <label className="field__label" htmlFor="dataset">
               Elevation dataset
@@ -341,10 +417,7 @@ export function App() {
                 <option value={0.6}>0.6 mm — Fast</option>
                 <option value={0.8}>0.8 mm — Draft</option>
               </select>
-              <p className="field__hint">
-                Sets the floor on terrain detail. Sampling finer than the nozzle makes ridges
-                the printer cannot lay down.
-              </p>
+              <p className="field__hint">Sets the floor on terrain detail.</p>
             </div>
           </section>
 
@@ -372,17 +445,6 @@ export function App() {
               onChange={(v) => update({ maxHeight_mm: v })}
               hint="Clamps the tallest peak. Exaggeration is reduced to fit."
             />
-            <NumberField
-              label="Sea level offset"
-              unit="m"
-              value={config.seaLevelOffset_m}
-              min={-500}
-              max={2000}
-              step={10}
-              disabled={busy}
-              onChange={(v) => update({ seaLevelOffset_m: v })}
-            />
-
             <div className="field">
               <label className="field__label">
                 Sampling step<span className="field__unit">m</span>
@@ -394,7 +456,9 @@ export function App() {
                   disabled={busy}
                   onChange={(e) => {
                     setAutoResolution(e.target.checked);
-                    update({ resolution_m: e.target.checked ? 'auto' : (gridPreview?.resolution_m ?? 30) });
+                    update({
+                      resolution_m: e.target.checked ? 'auto' : (gridPreview?.resolution_m ?? 30),
+                    });
                   }}
                 />
                 Auto
@@ -412,7 +476,6 @@ export function App() {
                 onChange={(v) => update({ resolution_m: v })}
               />
             ) : null}
-
             <NumberField
               label="Smoothing"
               value={config.smoothing}
@@ -431,106 +494,154 @@ export function App() {
               <dl className="stats">
                 <dt>Real extent</dt>
                 <dd>
-                  {(gridPreview.extentX_m / 1000).toFixed(1)} × {(gridPreview.extentY_m / 1000).toFixed(1)} km
+                  {(gridPreview.extentX_m / 1000).toFixed(1)} ×{' '}
+                  {(gridPreview.extentY_m / 1000).toFixed(1)} km
                 </dd>
                 <dt>Sampling step</dt>
                 <dd>
                   {gridPreview.resolution_m.toFixed(1)} m
                   {gridPreview.resolutionNozzleLimited ? (
-                    <span className="badge" title="Floored at one nozzle width">
-                      nozzle-limited
-                    </span>
+                    <span className="badge">nozzle-limited</span>
                   ) : null}
                 </dd>
-                <dt>Printable detail</dt>
-                <dd>{gridPreview.printableStep_m.toFixed(1)} m</dd>
                 <dt>Grid</dt>
                 <dd>
                   {gridPreview.cols} × {gridPreview.rows}
                 </dd>
-                <dt>Triangles</dt>
-                <dd>{estimateTriangles(gridPreview.cols, gridPreview.rows).toLocaleString()}</dd>
               </dl>
+            </section>
+          ) : null}
+
+          {bundle ? <Results bundle={bundle} dirty={dirty} /> : null}
+          {error ? (
+            <section>
+              <div className="alert alert--fail">{error}</div>
             </section>
           ) : null}
         </aside>
 
-        <main className="main">
+        <main className="viewport">
+          <div className={view === 'map' ? 'stage' : 'stage stage--hidden'}>
+            <MapView
+              basemapId={basemapId}
+              datasetId={config.dataset}
+              terrain3d={terrain3d}
+              shape={shape}
+              tool={tool}
+              routes={routes}
+              onShapeChange={(next) => applyShape(next, 'Custom selection')}
+              onToolFinished={() => setTool(null)}
+              onCursor={setCursor}
+            />
+
+            <div className="shapetools" role="group" aria-label="Selection shape">
+              <span className="shapetools__title">Draw area</span>
+              {TOOLS.map((t) => (
+                <button
+                  key={t.id}
+                  className={`shapetool${tool === t.id ? ' shapetool--on' : ''}`}
+                  onClick={() => setTool(tool === t.id ? null : t.id)}
+                  title={t.id === 'polygon' ? 'Click points, double-click to finish' : undefined}
+                >
+                  <span aria-hidden>{t.glyph}</span> {t.label}
+                </button>
+              ))}
+              <button className="shapetool" onClick={() => fitToRoutes(routes)} disabled={routes.length === 0}>
+                <span aria-hidden>⤢</span> Fit to routes
+              </button>
+            </div>
+
+            {tool ? (
+              <div className="drawhint">
+                {tool === 'polygon'
+                  ? 'Click to add points, double-click to finish. Esc cancels.'
+                  : 'Drag on the map to draw. Esc cancels.'}
+              </div>
+            ) : null}
+
+            <div className="statusstrip">
+              {cursor ? `${cursor[1].toFixed(4)}, ${cursor[0].toFixed(4)}` : '—'} · area:{' '}
+              {area_km2.toFixed(2)} km² · {shape.kind}
+            </div>
+          </div>
+
+          <div className={view === '3d' ? 'stage' : 'stage stage--hidden'}>
+            <Viewer bundle={bundle} shading={shading} autoSpin={autoSpin} />
+            <div className="shadingtools" role="group" aria-label="Shading mode">
+              {SHADING.map((s) => (
+                <button
+                  key={s.id}
+                  className={`shapetool${shading === s.id ? ' shapetool--on' : ''}`}
+                  onClick={() => setShading(s.id)}
+                >
+                  {s.label}
+                </button>
+              ))}
+              <button
+                className={`shapetool${autoSpin ? ' shapetool--on' : ''}`}
+                onClick={() => setAutoSpin(!autoSpin)}
+              >
+                Auto-spin
+              </button>
+            </div>
+            {bundle ? (
+              <div className="statsoverlay">
+                <strong>{bundle.stats.triangles.toLocaleString()}</strong> triangles ·{' '}
+                {bundle.stats.dimensions_mm.map((v) => v.toFixed(1)).join(' × ')} mm ·{' '}
+                {bundle.stats.extent_km.map((v) => v.toFixed(1)).join(' × ')} km ·{' '}
+                {bundle.stats.elevationRange_m.map((v) => v.toFixed(0)).join('–')} m · exag{' '}
+                {bundle.stats.verticalExaggeration.toFixed(2)}× ·{' '}
+                <span className={bundle.validation.watertight ? 'ok' : 'bad'}>
+                  Watertight: {bundle.validation.watertight ? 'Yes' : 'No'}
+                </span>
+              </div>
+            ) : null}
+          </div>
+
           {progress ? <ProgressPanel progress={progress} onCancel={onCancel} /> : null}
-
-          {error ? (
-            <div className="alert alert--fail">
-              <strong>Generation failed.</strong> {error}
-            </div>
-          ) : null}
-
-          {bundle && !progress ? <Results bundle={bundle} dirty={dirty} /> : null}
-
-          {!bundle && !progress && !error ? (
-            <div className="empty">
-              <h2>Nothing built yet</h2>
-              <p>
-                Pick an area, then press <strong>Generate</strong>. Phase 0 fetches real elevation
-                tiles, builds a watertight solid, validates that it is manifold, and writes a binary
-                STL.
-              </p>
-            </div>
-          ) : null}
         </main>
       </div>
 
       <footer className="attribution">
-        Elevation: {DEM_DATASETS[config.dataset]?.attribution ?? ''}
+        {BASEMAPS.find((b) => b.id === basemapId)?.attribution} · Elevation:{' '}
+        {dataset?.attribution ?? ''}
       </footer>
     </div>
   );
-}
-
-function slugify(name: string): string {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40) || 'route'
-  );
-}
-
-function estimateTriangles(cols: number, rows: number): number {
-  const perimeter = 2 * (cols + rows - 2);
-  return (cols - 1) * (rows - 1) * 2 + perimeter * 3;
 }
 
 function ProgressPanel({ progress, onCancel }: { progress: Progress; onCancel: () => void }) {
   const current = STAGE_ORDER.indexOf(progress.stage);
 
   return (
-    <div className="progress">
-      <h2>Generating your model…</h2>
-      <ol className="progress__stages">
-        {STAGE_LABELS.map((item) => {
-          const first = STAGE_ORDER.indexOf(item.stages[0]);
-          const last = STAGE_ORDER.indexOf(item.stages[item.stages.length - 1]);
-          const state = current > last ? 'done' : current >= first ? 'active' : 'pending';
-          return (
-            <li key={item.label} className={`progress__stage progress__stage--${state}`}>
-              <span className="progress__marker">
-                {state === 'done' ? '✓' : state === 'active' ? '◐' : '○'}
-              </span>
-              {item.label}
-            </li>
-          );
-        })}
-      </ol>
-      <div className="progress__bar">
-        <div className="progress__fill" style={{ width: `${progress.percent.toFixed(1)}%` }} />
+    <div className="progressoverlay">
+      <div className="progress">
+        <h2>Generating your model…</h2>
+        <ol className="progress__stages">
+          {STAGE_LABELS.map((item) => {
+            const first = STAGE_ORDER.indexOf(item.stages[0]);
+            const last = STAGE_ORDER.indexOf(item.stages[item.stages.length - 1]);
+            const state = current > last ? 'done' : current >= first ? 'active' : 'pending';
+            return (
+              <li key={item.label} className={`progress__stage progress__stage--${state}`}>
+                <span className="progress__marker">
+                  {state === 'done' ? '✓' : state === 'active' ? '◐' : '○'}
+                </span>
+                {item.label}
+              </li>
+            );
+          })}
+        </ol>
+        <div className="progress__bar">
+          <div className="progress__fill" style={{ width: `${progress.percent.toFixed(1)}%` }} />
+        </div>
+        <p className="progress__detail">
+          {progress.detail} — {progress.percent.toFixed(0)} %
+        </p>
+        <button className="btn" onClick={onCancel}>
+          Cancel
+        </button>
       </div>
-      <p className="progress__detail">
-        {progress.detail} — {progress.percent.toFixed(0)} %
-      </p>
-      <button className="btn" onClick={onCancel}>
-        Cancel
-      </button>
     </div>
   );
 }
@@ -539,36 +650,16 @@ function Results({ bundle, dirty }: { bundle: MeshBundle; dirty: boolean }) {
   const { stats, validation, warnings } = bundle;
 
   return (
-    <div className="results">
-      {dirty ? (
-        <div className="alert alert--dirty">Settings changed — regenerate to update.</div>
-      ) : null}
-
+    <section>
       <h2>Model</h2>
-      <dl className="stats stats--wide">
+      {dirty ? <div className="alert alert--dirty">Settings changed — regenerate to update.</div> : null}
+      <dl className="stats">
         <dt>Triangles</dt>
         <dd>{stats.triangles.toLocaleString()}</dd>
-        <dt>Vertices</dt>
-        <dd>{stats.vertices.toLocaleString()}</dd>
         <dt>Dimensions</dt>
-        <dd>
-          {stats.dimensions_mm[0].toFixed(1)} × {stats.dimensions_mm[1].toFixed(1)} ×{' '}
-          {stats.dimensions_mm[2].toFixed(1)} mm
-        </dd>
-        <dt>Real extent</dt>
-        <dd>
-          {stats.extent_km[0].toFixed(1)} × {stats.extent_km[1].toFixed(1)} km
-        </dd>
+        <dd>{stats.dimensions_mm.map((v) => v.toFixed(1)).join(' × ')} mm</dd>
         <dt>Elevation</dt>
-        <dd>
-          {stats.elevationRange_m[0].toFixed(0)} – {stats.elevationRange_m[1].toFixed(0)} m
-        </dd>
-        <dt>Vertical exaggeration</dt>
-        <dd>{stats.verticalExaggeration.toFixed(2)}×</dd>
-        <dt>Sampling step</dt>
-        <dd>
-          {stats.resolution_m.toFixed(1)} m ({stats.gridSize[0]} × {stats.gridSize[1]})
-        </dd>
+        <dd>{stats.elevationRange_m.map((v) => v.toFixed(0)).join(' – ')} m</dd>
         <dt>Watertight</dt>
         <dd className={validation.watertight ? 'ok' : 'bad'}>
           {validation.watertight ? '✓ Yes' : '✗ No'}
@@ -577,18 +668,11 @@ function Results({ bundle, dirty }: { bundle: MeshBundle; dirty: boolean }) {
         <dd className={validation.manifold ? 'ok' : 'bad'}>
           {validation.manifold ? '✓ Yes' : '✗ No'}
         </dd>
-        <dt>Volume</dt>
-        <dd>{(validation.volume_mm3 / 1000).toFixed(1)} cm³</dd>
-        <dt>Dataset</dt>
-        <dd>{stats.demDataset}</dd>
         <dt>Build time</dt>
         <dd>{(stats.buildTime_ms / 1000).toFixed(1)} s</dd>
       </dl>
 
-      <h2>Print check</h2>
-      {warnings.length === 0 ? (
-        <p className="ok">✓ No issues found.</p>
-      ) : (
+      {warnings.length > 0 ? (
         <ul className="warnings">
           {warnings.map((w, i) => (
             <li key={`${w.code}-${i}`} className={`warning warning--${w.level}`}>
@@ -596,14 +680,9 @@ function Results({ bundle, dirty }: { bundle: MeshBundle; dirty: boolean }) {
             </li>
           ))}
         </ul>
+      ) : (
+        <p className="ok">✓ No issues found.</p>
       )}
-
-      {validation.openEdges > 0 || validation.nonManifoldEdges > 0 ? (
-        <p className="note">
-          Open edges: {validation.openEdges} · Non-manifold edges: {validation.nonManifoldEdges} ·
-          Degenerate triangles: {validation.degenerateTriangles}
-        </p>
-      ) : null}
-    </div>
+    </section>
   );
 }
