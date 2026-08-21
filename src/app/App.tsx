@@ -33,12 +33,16 @@ import { Viewer, type ShadingMode } from '../preview/Viewer';
 import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
+import { LayersPanel } from './LayersPanel';
+import type { LayerId } from '../data/osm/tags';
+import type { LayerSettings } from '../geometry/features';
 
 const STAGE_LABELS: Array<{ stages: ProgressStage[]; label: string }> = [
   { stages: ['resolving'], label: 'Working out the scale' },
   { stages: ['fetching-dem'], label: 'Fetching elevation data' },
   { stages: ['building-heightfield'], label: 'Building the heightfield' },
   { stages: ['building-terrain'], label: 'Building the terrain' },
+  { stages: ['fetching-osm', 'building-features'], label: 'Adding map features' },
   { stages: ['building-routes'], label: 'Embossing your route' },
   { stages: ['validating', 'done'], label: 'Finalising the mesh' },
 ];
@@ -48,6 +52,8 @@ const STAGE_ORDER: ProgressStage[] = [
   'fetching-dem',
   'building-heightfield',
   'building-terrain',
+  'fetching-osm',
+  'building-features',
   'building-routes',
   'validating',
   'done',
@@ -189,6 +195,14 @@ export function App() {
     setDirty(true);
   }, []);
 
+  const updateLayer = useCallback((id: LayerId, patch: Partial<LayerSettings>) => {
+    setSettings((c) => ({
+      ...c,
+      layers: { ...c.layers, [id]: { ...c.layers[id], ...patch } },
+    }));
+    setDirty(true);
+  }, []);
+
   const removeRoute = useCallback((id: string) => {
     setRoutes((c) => c.filter((r) => r.id !== id));
     setDirty(true);
@@ -310,6 +324,8 @@ export function App() {
             onRemove={removeRoute}
             onFit={() => fitToRoutes(routes)}
           />
+
+          <LayersPanel layers={config.layers} busy={busy} onChange={updateLayer} />
 
           <section>
             <h2>Selection</h2>

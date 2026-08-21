@@ -1,0 +1,296 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildLineLayer,
+  groupLines,
+  mergeSolids,
+  splitAgainstWater,
+  waterRings,
+  type LayerSettings,
+} from '../src/geometry/features';
+import type { LineFeature, PolygonFeature } from '../src/data/osm/normalise';
+import type { Pt } from '../src/data/gpx/simplify';
+import type { Ring } from '../src/geometry/polygons';
+import { validateMesh } from '../src/geometry/validate';
+import { unprojectENU } from '../src/geometry/coords';
+import { defaultLayers } from '../src/config/presets';
+import { makeHeightfield, scaleFor } from './helpers';
+
+const hf = makeHeightfield(60, 60, (i, j) => 300 + 2 * i + 1.5 * j);
+const scale = scaleFor(hf);
+
+/** A square of water in world metres, centred on the origin. */
+const LAKE: Ring = [
+  [-500, -500],
+  [500, -500],
+  [500, 500],
+  [-500, 500],
+];
+
+function lineAcrossLake(): Pt[] {
+  const out: Pt[] = [];
+  for (let x = -1500; x <= 1500; x += 100) out.push([x, 0]);
+  return out;
+}
+
+describe('splitAgainstWater', () => {
+  /** docs/05 Stage 2-3c: a road diving under a river is the classic artefact. */
+  it('deletes the wet part of a road that is not a bridge', () => {
+    const { segments, drowned } = splitAgainstWater(lineAcrossLake(), false, [LAKE]);
+
+    expect(drowned).toBeGreaterThan(0);
+    expect(segments).toHaveLength(2);
+
+    for (const segment of segments) {
+      for (const [x] of segment.points) {
+        expect(Math.abs(x)).toBeGreaterThanOrEqual(500 - 100);
+      }
+    }
+  });
+
+  /** docs/05 Stage 2-3b: bridges are kept, not deleted. */
+  it('keeps a bridge intact across the same water', () => {
+    const { segments, drowned } = splitAgainstWater(lineAcrossLake(), true, [LAKE]);
+    expect(drowned).toBe(0);
+    expect(segments).toHaveLength(1);
+    expect(segments[0].bridge).toBe(true);
+    expect(segments[0].points).toHaveLength(31);
+  });
+
+  it('leaves a road that never touches water alone', () => {
+    const dry: Pt[] = [
+      [-1500, 2000],
+      [1500, 2000],
+    ];
+    const { segments, drowned } = splitAgainstWater(dry, false, [LAKE]);
+    expect(drowned).toBe(0);
+    expect(segments).toHaveLength(1);
+  });
+
+  it('does nothing when there is no water at all', () => {
+    const { segments } = splitAgainstWater(lineAcrossLake(), false, []);
+    expect(segments).toHaveLength(1);
+  });
+
+  it('drops a road entirely submerged rather than emitting a stub', () => {
+    const submerged: Pt[] = [
+      [-100, 0],
+      [0, 0],
+      [100, 0],
+    ];
+    const { segments } = splitAgainstWater(submerged, false, [LAKE]);
+    expect(segments).toHaveLength(0);
+  });
+});
+
+describe('waterRings', () => {
+  it('takes outer rings only, so an island in a lake stays dry land', () => {
+    const polygons: PolygonFeature[] = [
+      {
+        layer: 'water',
+        subtype: 'lake',
+        bridge: false,
+        layerOrder: 0,
+        rings: [
+          [
+            [0, 0],
+            [0.01, 0],
+            [0.01, 0.01],
+            [0, 0.01],
+          ],
+          [
+            [0.004, 0.004],
+            [0.006, 0.004],
+            [0.006, 0.006],
+            [0.004, 0.006],
+          ],
+        ],
+      },
+      {
+        layer: 'greenery',
+        subtype: 'park',
+        bridge: false,
+        layerOrder: 0,
+        rings: [
+          [
+            [1, 1],
+            [1.01, 1],
+            [1.01, 1.01],
+          ],
+        ],
+      },
+    ];
+
+    const rings = waterRings(polygons, scale);
+    expect(rings).toHaveLength(1);
+    expect(rings[0]).toHaveLength(4);
+  });
+});
+
+describe('mergeSolids', () => {
+  it('offsets indices so parts do not reference each other', () => {
+    const a = {
+      positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      indices: new Uint32Array([0, 1, 2]),
+      triangles: 1,
+    };
+    const merged = mergeSolids([a, a]);
+    expect(merged.triangles).toBe(2);
+    expect(Array.from(merged.indices)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(merged.positions).toHaveLength(18);
+  });
+
+  it('returns an empty solid for no input', () => {
+    expect(mergeSolids([]).triangles).toBe(0);
+  });
+});
+
+describe('buildLineLayer', () => {
+  const layers = defaultLayers();
+  const options = {
+    heightfield: hf,
+    scale,
+    selection: null,
+    nozzleDiameter_mm: 0.4,
+    baseThickness_mm: 3,
+    layers,
+  };
+
+  /** The builder works in lon/lat, so synthetic metres go back through the projection. */
+  function feature(points: Pt[], overrides: Partial<LineFeature> = {}): LineFeature {
+    return {
+      layer: 'roads',
+      subtype: 'primary',
+      width_m: 12,
+      bridge: false,
+      layerOrder: 0,
+      points: points.map((p) => unprojectENU(p[0], p[1], scale.origin)),
+      ...overrides,
+    };
+  }
+
+  it('builds a manifold solid for a road', () => {
+    const road = feature([
+      [-2000, -500],
+      [0, 0],
+      [2000, 600],
+    ]);
+    const built = buildLineLayer('roads', [road], [], options);
+
+    expect(built.part).not.toBeNull();
+    expect(built.stats.triangles).toBeGreaterThan(0);
+
+    const v = validateMesh(built.part!.positions, built.part!.indices);
+    expect(v.openEdges).toBe(0);
+    expect(v.nonManifoldEdges).toBe(0);
+    expect(v.manifold).toBe(true);
+  });
+
+  it('gives the part the layer name and colour, for one 3MF object per layer', () => {
+    const built = buildLineLayer('roads', [feature([[-1000, 0], [1000, 0]])], [], options);
+    expect(built.part?.name).toBe('roads');
+    expect(built.part?.color).toBe(layers.roads.color);
+  });
+
+  it('merges every road into a single part', () => {
+    const two = [feature([[-1000, -200], [1000, -200]]), feature([[-1000, 200], [1000, 200]])];
+    const built = buildLineLayer('roads', two, [], options);
+    expect(built.stats.features).toBe(2);
+    expect(built.part).not.toBeNull();
+  });
+
+  it('returns nothing when the layer is disabled', () => {
+    const off = { ...options, layers: { ...layers, roads: { ...layers.roads, enabled: false } } };
+    expect(buildLineLayer('roads', [feature([[-1000, 0], [1000, 0]])], [], off).part).toBeNull();
+  });
+
+  it('honours the subtype filter', () => {
+    const filtered: Record<string, LayerSettings> = {
+      ...layers,
+      roads: { ...layers.roads, subtypes: ['motorway'] },
+    };
+    const built = buildLineLayer(
+      'roads',
+      [feature([[-1000, 0], [1000, 0]], { subtype: 'residential' })],
+      [],
+      { ...options, layers: filtered },
+    );
+    expect(built.part).toBeNull();
+  });
+
+  /** docs/08-pitfalls.md#sub-nozzle-features */
+  it('clamps a sub-nozzle width and says so', () => {
+    // A 2 m footpath on this scale is far under two nozzle widths.
+    const built = buildLineLayer(
+      'roads',
+      [feature([[-1000, 0], [1000, 0]], { width_m: 2 })],
+      [],
+      options,
+    );
+    expect(built.stats.widthClamped).toBe(true);
+    expect(built.stats.width_mm).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('deletes a road through water but keeps the bridge over it', () => {
+    const road = feature(lineAcrossLake());
+    const bridge = feature(lineAcrossLake(), { bridge: true });
+
+    const drowned = buildLineLayer('roads', [road], [LAKE], options);
+    const kept = buildLineLayer('roads', [bridge], [LAKE], options);
+
+    expect(drowned.stats.drownedSegments).toBeGreaterThan(0);
+    expect(kept.stats.drownedSegments).toBe(0);
+    // The bridge survives as one piece; the road comes back as two.
+    expect(kept.stats.features).toBe(1);
+    expect(drowned.stats.features).toBe(2);
+  });
+
+  it('gives a bridge a flat deck rather than draping it into the riverbed', () => {
+    const bridge = feature(lineAcrossLake(), { bridge: true });
+    const built = buildLineLayer('roads', [bridge], [LAKE], options);
+    const p = built.part!.positions;
+
+    // The terrain ramps steadily across this heightfield, so a draped deck would
+    // span a wide Z range. A flat deck spans only its own thickness.
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let i = 2; i < p.length; i += 3) {
+      if (p[i] < minZ) minZ = p[i];
+      if (p[i] > maxZ) maxZ = p[i];
+    }
+
+    const draped = buildLineLayer('roads', [feature(lineAcrossLake())], [], options);
+    const dp = draped.part!.positions;
+    let dMin = Infinity;
+    let dMax = -Infinity;
+    for (let i = 2; i < dp.length; i += 3) {
+      if (dp[i] < dMin) dMin = dp[i];
+      if (dp[i] > dMax) dMax = dp[i];
+    }
+
+    expect(maxZ - minZ).toBeLessThan(dMax - dMin);
+  });
+
+  it('stays manifold for a bridge, which uses a different Z sampler', () => {
+    const built = buildLineLayer(
+      'roads',
+      [feature(lineAcrossLake(), { bridge: true })],
+      [LAKE],
+      options,
+    );
+    expect(validateMesh(built.part!.positions, built.part!.indices).manifold).toBe(true);
+  });
+});
+
+describe('groupLines', () => {
+  it('buckets features by layer', () => {
+    const lines = [
+      { layer: 'roads' },
+      { layer: 'roads' },
+      { layer: 'railways' },
+    ] as unknown as LineFeature[];
+    const grouped = groupLines(lines);
+    expect(grouped.get('roads')).toHaveLength(2);
+    expect(grouped.get('railways')).toHaveLength(1);
+    expect(grouped.get('water')).toBeUndefined();
+  });
+});

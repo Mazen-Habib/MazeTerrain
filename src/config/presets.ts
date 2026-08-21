@@ -7,6 +7,8 @@
  */
 import type { BBox, GenerateConfig } from '../geometry/types';
 import { DEFAULT_DATASET } from '../data/dem/datasets';
+import { LAYERS } from '../data/osm/tags';
+import type { LayerSettings } from '../geometry/features';
 
 export interface Preset {
   id: string;
@@ -85,5 +87,23 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
     smoothing: 0,
     layerHeight_mm: 0.2,
     nozzleDiameter_mm: 0.4,
+    layers: defaultLayers(),
   };
+}
+
+/** F4 defaults, one entry per layer. */
+export function defaultLayers(): Record<string, LayerSettings> {
+  const out: Record<string, LayerSettings> = {};
+  for (const layer of LAYERS) {
+    out[layer.id] = {
+      enabled: layer.enabled,
+      color: layer.color,
+      height_mm: layer.height_mm,
+      heightScale: 1.0,
+      widthScale: 1.0,
+      minWidth_mm: 0.8,
+      subtypes: [...layer.subtypes],
+    };
+  }
+  return out;
 }

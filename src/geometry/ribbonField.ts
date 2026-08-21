@@ -33,6 +33,18 @@ import { ringArea } from './ribbon';
  */
 const CELLS_PER_HALF_WIDTH = 6;
 
+/**
+ * Coarser sampling for OSM line layers.
+ *
+ * The route is the subject of the product and gets the fine default. A city's
+ * worth of roads does not: at the fine setting, roads in a 1.6 km circle of
+ * Islamabad came to 1.23 M triangles on their own, which is ten times the whole
+ * terrain and produces an STL no slicer will enjoy. Halving the sampling
+ * quarters the contour work, and a road is a 6 m ribbon nobody inspects for
+ * curvature fidelity.
+ */
+export const FEATURE_CELLS_PER_HALF_WIDTH = 3;
+
 /** Never build a grid larger than this, whatever the route length. */
 const MAX_FIELD_CELLS = 6_000_000;
 
@@ -377,6 +389,7 @@ export function buildRibbonField(
   centreline: Pt[],
   width_m: number,
   selection: Ring | null = null,
+  cellsPerHalfWidth: number = CELLS_PER_HALF_WIDTH,
 ): RibbonFieldResult {
   const empty: RibbonFieldResult = {
     polygons: [],
@@ -385,7 +398,7 @@ export function buildRibbonField(
   if (centreline.length < 2 || width_m <= 0) return empty;
 
   const halfWidth = width_m / 2;
-  let cell = halfWidth / CELLS_PER_HALF_WIDTH;
+  let cell = halfWidth / Math.max(1, cellsPerHalfWidth);
   let coarsened = false;
 
   // Guard the grid size the same way the terrain grid is guarded.

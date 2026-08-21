@@ -101,6 +101,8 @@ export interface GenerateConfig {
    * See docs/08-pitfalls.md#sub-nozzle-terrain-detail.
    */
   nozzleDiameter_mm: number;
+  /** Per-layer OSM feature settings, keyed by LayerId. */
+  layers: Record<string, import('./features').LayerSettings>;
 }
 
 /** Config plus the routes to emboss. Kept separate so GenerateConfig stays serialisable-small. */
@@ -131,6 +133,8 @@ export interface SerialisableRoute {
 export type ProgressStage =
   | 'resolving'
   | 'fetching-dem'
+  | 'fetching-osm'
+  | 'building-features'
   | 'building-heightfield'
   | 'building-terrain'
   | 'building-routes'

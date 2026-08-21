@@ -16,6 +16,10 @@ import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
 import { repairAndValidate, validateMesh } from './validate';
 import { buildRouteSolid } from './route';
+import { buildLineLayer, groupLines, waterRings } from './features';
+import { fetchOsm, OverpassError } from '../data/osm/overpass';
+import { normalise } from '../data/osm/normalise';
+import { LAYER_BY_ID, type LayerId } from '../data/osm/tags';
 import { selectionRingWorld, type SelectionShape } from './selection';
 import type { Route } from '../data/gpx/types';
 import type {
@@ -33,7 +37,9 @@ const TERRAIN_COLOR = '#A0907A';
 const DEM_START = 5;
 const DEM_END = 45;
 const HEIGHTFIELD_END = 60;
-const TERRAIN_END = 80;
+const TERRAIN_END = 64;
+const OSM_END = 72;
+const FEATURES_END = 82;
 const ROUTES_END = 92;
 
 /** Never drop below this looking for coverage; the model would be meaningless. */
@@ -233,6 +239,96 @@ export async function assemble(
     : buildTerrainMesh(heightfield, scale);
   throwIfAborted();
 
+  // --- Stages 2-3 + 5: OSM features ----------------------------------------
+  const enabledLayers = (Object.keys(config.layers) as LayerId[]).filter(
+    (id) => config.layers[id]?.enabled && LAYER_BY_ID[id],
+  );
+  const featureParts: MeshPart[] = [];
+
+  if (enabledLayers.length > 0) {
+    report({ stage: 'fetching-osm', percent: TERRAIN_END, detail: 'Fetching map data' });
+
+    try {
+      const response = await fetchOsm(config.bbox, enabledLayers, {
+        ...(signal ? { signal } : {}),
+        onAttempt: (detail) => report({ stage: 'fetching-osm', percent: TERRAIN_END, detail }),
+      });
+      throwIfAborted();
+
+      const features = normalise(response);
+      report({
+        stage: 'building-features',
+        percent: OSM_END,
+        detail: `Building ${features.lines.length} map features`,
+      });
+
+      // Water footprints are needed even when the water layer is off, because a
+      // road running through a river has to be deleted either way.
+      const water = waterRings(features.polygons, scale);
+      const grouped = groupLines(features.lines);
+      const featureOptions = {
+        heightfield,
+        scale,
+        selection: ringWorld,
+        nozzleDiameter_mm: config.nozzleDiameter_mm,
+        baseThickness_mm: config.baseThickness_mm,
+        layers: config.layers,
+      };
+
+      let done = 0;
+      for (const layer of enabledLayers) {
+        const lines = grouped.get(layer);
+        if (!lines || lines.length === 0) {
+          // Naming the empty layer beats printing nothing and saying nothing
+          // (docs/08-pitfalls.md#sparse-osm-data).
+          if (LAYER_BY_ID[layer].kind === 'line') {
+            warnings.push({
+              level: 'warn',
+              code: 'layer-empty',
+              message: `No ${LAYER_BY_ID[layer].label.toLowerCase()} found in this area.`,
+            });
+          }
+          done++;
+          continue;
+        }
+
+        const built = buildLineLayer(layer, lines, water, featureOptions);
+        if (built.part) featureParts.push(built.part);
+
+        if (built.stats.widthClamped) {
+          warnings.push({
+            level: 'warn',
+            code: 'feature-width-clamped',
+            message:
+              `Some ${LAYER_BY_ID[layer].label.toLowerCase()} were widened to ` +
+              `${(2 * config.nozzleDiameter_mm).toFixed(1)} mm, the minimum a ` +
+              `${config.nozzleDiameter_mm} mm nozzle can print. They will look wider than scale.`,
+          });
+        }
+
+        done++;
+        report({
+          stage: 'building-features',
+          percent: OSM_END + ((FEATURES_END - OSM_END) * done) / enabledLayers.length,
+          detail: `${LAYER_BY_ID[layer].label}: ${built.stats.features} feature(s)`,
+        });
+        throwIfAborted();
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      // A missing basemap layer must not cost the user their terrain.
+      warnings.push({
+        level: 'warn',
+        code: 'osm-unavailable',
+        message:
+          err instanceof OverpassError
+            ? err.userMessage
+            : `Could not load map features: ${err instanceof Error ? err.message : String(err)}. ` +
+              `The terrain and route were built without them.`,
+      });
+    }
+  }
+
   // --- Stage 6: route solids ------------------------------------------------
   const visibleRoutes = routes.filter((r) => r.style.visible);
   const routeParts: MeshPart[] = [];
@@ -311,17 +407,30 @@ export async function assemble(
   // Each route is validated as its own closed solid. In multicolour mode the
   // parts stay separate and overlaps are expected — the route deliberately
   // penetrates the terrain (docs/05-geometry-pipeline.md Stage 7).
-  for (const part of routeParts) {
-    const check = repairAndValidate(part.positions, part.indices);
-    part.positions = check.positions;
-    part.indices = check.indices;
+  for (const part of [...featureParts, ...routeParts]) {
+    // Feature layers are a MERGE of many closed solids that legitimately touch
+    // at junctions. Welding them would fuse those solids into edges with four
+    // adjacent faces and report a non-manifold layer that is nothing of the
+    // kind — in multicolour mode overlapping parts are expected
+    // (docs/05-geometry-pipeline.md Stage 7). Each solid is closed by
+    // construction and mergeSolids offsets indices, so validate as-is.
+    const merged = featureParts.includes(part);
+    const check = merged
+      ? { validation: validateMesh(part.positions, part.indices) }
+      : repairAndValidate(part.positions, part.indices);
+
+    if (!merged) {
+      const repaired = check as ReturnType<typeof repairAndValidate>;
+      part.positions = repaired.positions;
+      part.indices = repaired.indices;
+    }
     part.manifold = check.validation.manifold;
     if (!check.validation.manifold) {
       warnings.push({
         level: 'fail',
-        code: 'route-not-manifold',
+        code: 'part-not-manifold',
         message:
-          `${part.name} is not manifold: ${check.validation.openEdges} open edge(s), ` +
+          `Layer "${part.name}" is not manifold: ${check.validation.openEdges} open edge(s), ` +
           `${check.validation.nonManifoldEdges} non-manifold edge(s). Export is blocked.`,
       });
     }
@@ -366,7 +475,7 @@ export async function assemble(
     manifold: validation.manifold,
   };
 
-  const parts = [terrainPart, ...routeParts];
+  const parts = [terrainPart, ...featureParts, ...routeParts];
 
   let triangles = 0;
   let vertices = 0;

@@ -1,5 +1,6 @@
 import { resolveScale } from '../src/geometry/coords';
 import { extremes, type Heightfield } from '../src/geometry/heightfield';
+import { defaultLayers } from '../src/config/presets';
 import type { BBox, GenerateConfig } from '../src/geometry/types';
 
 /** Build a heightfield from a deterministic function, bypassing the network. */
@@ -39,6 +40,7 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     smoothing: 0,
     layerHeight_mm: 0.2,
     nozzleDiameter_mm: 0.4,
+    layers: defaultLayers(),
     ...overrides,
   };
 }
