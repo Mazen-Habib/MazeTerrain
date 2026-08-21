@@ -301,6 +301,20 @@ function cleanRing(ring: Ring, cell: number): Ring {
   return out.length >= 3 ? out : deduped;
 }
 
+/**
+ * Smallest ring worth keeping, in cells of area.
+ *
+ * Where the contour pinches against itself — which a route doing repeated laps
+ * does constantly — marching squares emits 3- and 4-vertex loops enclosing
+ * essentially nothing. A real 10 km lap route produced eight of them, with areas
+ * of 0, 0, 0, -1, -3, -1, 0 and 0 square metres alongside genuine holes of
+ * 36 774 and 2 235. Passed to earcut as holes they wreck the triangulation and
+ * the route comes back non-manifold, with a stray blade where the sliver was
+ * extruded. A hole smaller than a few cells could not be resolved by a field
+ * sampled at cell resolution anyway, so it is noise by construction.
+ */
+const MIN_RING_AREA_CELLS = 4;
+
 /** Nest clockwise rings (holes) inside the smallest counter-clockwise ring containing them. */
 function nestRings(rings: Ring[]): MultiPolygon {
   const outers: Array<{ ring: Ring; area: number }> = [];
@@ -396,9 +410,10 @@ export function buildRibbonField(
 
   const field = distanceField(centreline, halfWidth, cell, selection);
   const segments = marchingSquares(field, halfWidth);
+  const minArea = MIN_RING_AREA_CELLS * cell * cell;
   const rings = chainRings(segments, cell)
     .map((ring) => cleanRing(ring, cell))
-    .filter((ring) => ring.length >= 3);
+    .filter((ring) => ring.length >= 3 && Math.abs(ringArea(ring)) >= minArea);
   const polygons = nestRings(rings);
 
   return {

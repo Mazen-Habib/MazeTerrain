@@ -194,6 +194,77 @@ describe('buildRibbonField', () => {
     expect(ribbon([[0, 0], [1, 0]], 0)).toEqual([]);
   });
 
+  /**
+   * docs/08-pitfalls.md#ribbon-sliver-rings — a real 10 km lap route produced
+   * eight 3-and-4-vertex rings of ~0 m2 alongside its genuine holes. Handed to
+   * earcut as holes they wreck the triangulation and the route solid comes back
+   * non-manifold with a stray blade where the sliver was extruded.
+   */
+  it('emits no zero-area rings for a route that laps over itself', () => {
+    const laps: Pt[] = [];
+    for (let lap = 0; lap < 12; lap++) {
+      for (let i = 0; i <= 90; i++) {
+        const a = (i / 90) * Math.PI * 2;
+        // Each lap wobbles slightly, so passes touch and pinch rather than
+        // landing exactly on top of one another.
+        const rr = 340 + Math.sin(a * 5 + lap) * 9 + lap * 0.7;
+        laps.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+      }
+    }
+
+    const result = buildRibbonField(laps, 34);
+    const cellArea = result.stats.cell_m * result.stats.cell_m;
+
+    for (const poly of result.polygons) {
+      for (const ring of poly) {
+        expect(ring.length).toBeGreaterThanOrEqual(3);
+        expect(Math.abs(ringArea(ring))).toBeGreaterThanOrEqual(cellArea);
+      }
+    }
+    // The lap still has its genuine hole in the middle.
+    expect(result.polygons[0].length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('builds a manifold solid from a lapping route', () => {
+    const hf2 = makeHeightfield(50, 50, (i, j) => 180 + 0.05 * i + 0.04 * j);
+    const scale2 = scaleFor(hf2);
+    const laps: Pt[] = [];
+    for (let lap = 0; lap < 10; lap++) {
+      for (let i = 0; i <= 80; i++) {
+        const a = (i / 80) * Math.PI * 2;
+        const rr = 700 + Math.sin(a * 4 + lap) * 20 + lap * 2;
+        laps.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+      }
+    }
+    const R = 6378137;
+    const DEG = Math.PI / 180;
+    const route: Route = {
+      id: 'laps',
+      name: 'Laps',
+      points: laps.map(([x, y]) => ({
+        lon: scale2.origin.lon0 + x / (R * DEG * scale2.origin.cosLat0),
+        lat: scale2.origin.lat0 + y / (R * DEG),
+      })),
+      distance_m: 0,
+      elevationGain_m: null,
+      bbox: { west: 0, south: 0, east: 0, north: 0 },
+      style: defaultRouteStyle(),
+    };
+
+    const built = buildRouteSolid(route, {
+      heightfield: hf2,
+      scale: scale2,
+      selection: null,
+      nozzleDiameter_mm: 0.4,
+      baseThickness_mm: 3,
+    });
+    expect(built.mesh.triangles).toBeGreaterThan(0);
+    const v = validateMesh(built.mesh.positions, built.mesh.indices);
+    expect(v.openEdges).toBe(0);
+    expect(v.nonManifoldEdges).toBe(0);
+    expect(v.manifold).toBe(true);
+  });
+
   it('stays inside the grid cap for a long route', () => {
     const long: Pt[] = [];
     for (let i = 0; i < 4000; i++) long.push([i * 20, Math.sin(i / 50) * 500]);
