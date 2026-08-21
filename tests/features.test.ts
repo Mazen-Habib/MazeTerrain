@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildLineLayer,
   groupLines,
+  ladderWidth_mm,
   mergeSolids,
+  resolveMinWidth_mm,
+  selectLegibleSubtypes,
   splitAgainstWater,
   waterRings,
   type LayerSettings,
@@ -267,7 +270,7 @@ describe('buildLineLayer', () => {
       { ...options, layers: keep },
     );
     expect(built.stats.widthClamped).toBe(true);
-    expect(built.stats.width_mm).toBeGreaterThanOrEqual(0.8);
+    expect(built.stats.width_mm).toBeGreaterThanOrEqual(0.4);
   });
 
   it('deletes a road through water but keeps the bridge over it', () => {
@@ -495,5 +498,73 @@ describe('touching contours', () => {
     const field = buildRibbonField(streetGrid(), 60, null, 3);
     expect(field.polygons).toHaveLength(1);
     expect(field.polygons[0].length).toBeGreaterThan(50);
+  });
+});
+
+/**
+ * Width model.
+ *
+ * The failure this replaces: at 11.2 km across, every road class fell under the
+ * printable floor, so all ten clamped to the same 0.8 mm — 90 m of real width
+ * on streets 100 m apart. The bands touched and the city printed as one slab.
+ */
+describe('printed width', () => {
+  const scale = 100 / 11200; // the user's 11.2 km model at 100 mm
+  const floor = 0.2; // one 0.2 mm nozzle
+
+  it('takes an explicit floor at face value, including below the nozzle', () => {
+    expect(resolveMinWidth_mm('auto', 0.4)).toBe(0.4);
+    expect(resolveMinWidth_mm(0.1, 0.4)).toBe(0.1);
+    expect(resolveMinWidth_mm(1.5, 0.4)).toBe(1.5);
+  });
+
+  it('puts the narrowest class exactly on the floor', () => {
+    expect(ladderWidth_mm(3, 3, floor, scale)).toBeCloseTo(floor, 10);
+  });
+
+  it('keeps classes distinguishable instead of collapsing them', () => {
+    const track = ladderWidth_mm(3, 3, floor, scale);
+    const residential = ladderWidth_mm(6, 3, floor, scale);
+    const trunk = ladderWidth_mm(16, 3, floor, scale);
+
+    expect(residential).toBeGreaterThan(track * 1.2);
+    expect(trunk).toBeGreaterThan(residential * 1.2);
+    // ...but compressed, or the widest class closes the grid again.
+    expect(trunk / track).toBeLessThan(16 / 3);
+  });
+
+  it('never draws a road narrower than true scale, and never exaggerates a large model', () => {
+    // A 2 km model: a 20 m motorway is 1 mm, already well over the floor.
+    const big = 100 / 2000;
+    expect(ladderWidth_mm(20, 3, floor, big)).toBeCloseTo(20 * big, 10);
+  });
+});
+
+describe('selectLegibleSubtypes', () => {
+  const ordered = ['motorway', 'primary', 'residential', 'track'];
+
+  /**
+   * The greedy version skipped an overflowing class and kept buying cheaper
+   * ones after it, so an Islamabad model dropped residential streets and spent
+   * the change on tracks and footpaths.
+   */
+  it('cuts the tail, never the middle', () => {
+    const lengths = new Map([
+      ['motorway', 1_000],
+      ['primary', 1_000],
+      ['residential', 10_000_000], // far too much to fit
+      ['track', 100], // cheap, but less important than residential
+    ]);
+    const { kept, dropped } = selectLegibleSubtypes(
+      ordered, lengths, () => 0.5, 0.01, 10_000,
+    );
+    expect([...kept]).toEqual(['motorway', 'primary']);
+    expect(dropped).toEqual(['residential', 'track']);
+  });
+
+  it('always keeps the most important class, however dense', () => {
+    const lengths = new Map([['motorway', 1e9], ['primary', 1e9]]);
+    const { kept } = selectLegibleSubtypes(ordered, lengths, () => 0.5, 0.01, 10_000);
+    expect([...kept]).toEqual(['motorway']);
   });
 });

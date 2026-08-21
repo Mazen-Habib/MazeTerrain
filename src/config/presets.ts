@@ -101,7 +101,7 @@ export function defaultLayers(): Record<string, LayerSettings> {
       height_mm: layer.height_mm,
       heightScale: 1.0,
       widthScale: 1.0,
-      minWidth_mm: 0.8,
+      minWidth_mm: 'auto',
       subtypes: [...layer.subtypes],
       legibilityFilter: true,
     };

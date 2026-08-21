@@ -325,7 +325,12 @@ export function App() {
             onFit={() => fitToRoutes(routes)}
           />
 
-          <LayersPanel layers={config.layers} busy={busy} onChange={updateLayer} />
+          <LayersPanel
+            layers={config.layers}
+            busy={busy}
+            nozzleDiameter_mm={config.nozzleDiameter_mm}
+            onChange={updateLayer}
+          />
 
           <section>
             <h2>Selection</h2>

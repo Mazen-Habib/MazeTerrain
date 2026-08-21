@@ -41,12 +41,13 @@ export interface RouteBuildResult {
 }
 
 /**
- * Minimum printable width is two nozzle diameters — below that the slicer
- * cannot lay a perimeter and drops the geometry entirely
- * (docs/08-pitfalls.md#sub-nozzle-features).
+ * Minimum printable width is one nozzle diameter — a single extrusion. Below
+ * it the slicer has nothing to lay and drops the geometry entirely. Two
+ * diameters is the rule for a free-standing wall; a route is a ridge on solid
+ * base (docs/08-pitfalls.md#sub-nozzle-features).
  */
 export function minPrintableWidth_mm(nozzleDiameter_mm: number): number {
-  return 2 * nozzleDiameter_mm;
+  return nozzleDiameter_mm;
 }
 
 /** docs/05-geometry-pipeline.md Stage 5: penetration is what makes the union clean. */

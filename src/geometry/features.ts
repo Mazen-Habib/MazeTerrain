@@ -34,15 +34,23 @@ export interface LayerSettings {
   height_mm: number;
   heightScale: number;
   widthScale: number;
-  minWidth_mm: number;
+  /**
+   * Narrowest printed line for this layer, or 'auto' for one nozzle diameter.
+   *
+   * A number is taken at face value, including below the nozzle. That is a real
+   * choice: a model destined for resin, or for a render rather than a printer,
+   * wants finer lines than an FDM nozzle can lay, and forcing everything up to
+   * the nozzle is what turns a city into a slab.
+   */
+  minWidth_mm: number | 'auto';
   subtypes: string[];
   /**
    * Keep only as many classes as the model can legibly carry.
    *
    * Below a nozzle width nothing prints at true scale, so every road on a large
    * model is exaggerated — the question is how many classes to exaggerate before
-   * the result is a solid mass rather than a map. At 21 km across, every road
-   * class clamped to 0.8 mm would cover ~95% of a 100 mm model. Classes are
+   * the result is a solid mass rather than a map. Measured on Islamabad at
+   * 11.2 km, all ten road classes cover 78% of a 100 mm model. Classes are
    * taken in importance order until printed coverage reaches its limit, so a
    * city shows motorways and primaries while a neighbourhood shows every lane.
    * See docs/08-pitfalls.md#sub-nozzle-classes-become-porridge.
@@ -77,8 +85,12 @@ export interface FeatureBuildStats {
   truncated: boolean;
   /** Segments deleted for running through water without a bridge tag. */
   drownedSegments: number;
+  /** True when any class had to be printed wider than true scale. */
   widthClamped: boolean;
+  /** Widest printed line in this layer. */
   width_mm: number;
+  /** Narrowest printed line in this layer — the one a nozzle has to manage. */
+  narrowestWidth_mm: number;
   /** Classes left out because they are narrower than the nozzle at this scale. */
   droppedSubtypes: string[];
 }
@@ -88,6 +100,59 @@ export interface FeatureBuildStats {
  * reading as a map. A quarter is generous — at a third, a street grid closes up.
  */
 const COVERAGE_LIMIT = 0.25;
+
+/**
+ * Narrowest line a printer can lay down, in print millimetres.
+ *
+ * One nozzle diameter, not two. Two is the rule for a *free-standing* wall,
+ * which needs an outward perimeter on each side. A road is a ridge sitting on
+ * solid base, so any Arachne-era slicer lays it as a single extrusion.
+ * See docs/08-pitfalls.md#sub-nozzle-features.
+ */
+export function autoMinWidth_mm(nozzleDiameter_mm: number): number {
+  return nozzleDiameter_mm;
+}
+
+export function resolveMinWidth_mm(
+  setting: number | 'auto',
+  nozzleDiameter_mm: number,
+): number {
+  if (setting === 'auto') return autoMinWidth_mm(nozzleDiameter_mm);
+  return Math.max(0.01, setting);
+}
+
+/**
+ * How hard class widths are compressed once they fall below the floor.
+ *
+ * Square root. At a city scale every road class is sub-nozzle — an 11 km model
+ * puts a 20 m motorway at 0.18 mm and a 3 m track at 0.03 mm — so clamping each
+ * to the floor gave all of them one identical width, and the street hierarchy
+ * that makes a map readable disappeared. Real widths cannot be used and equal
+ * widths are useless, so classes are spread on a ladder anchored at the floor:
+ * the narrowest class prints at exactly the floor and wider classes rise by the
+ * square root of their real ratio. Linear spread would put a motorway seven
+ * times wider than a track and close the grid again; the root keeps the spread
+ * near 2x, which reads as hierarchy without eating the model.
+ */
+const WIDTH_LADDER_GAMMA = 0.5;
+
+/**
+ * Printed width for one class.
+ *
+ * Never below the floor, never below true scale — the ladder only ever lifts,
+ * so a model large enough to print roads at their real width is not exaggerated.
+ */
+export function ladderWidth_mm(
+  natural_m: number,
+  narrowest_m: number,
+  floor_mm: number,
+  scale_mm_per_m: number,
+): number {
+  const natural_mm = natural_m * scale_mm_per_m;
+  if (!(narrowest_m > 0) || !(natural_m > 0)) return Math.max(floor_mm, natural_mm);
+  const lifted = floor_mm * Math.pow(natural_m / narrowest_m, WIDTH_LADDER_GAMMA);
+  return Math.max(natural_mm, lifted);
+}
 
 /** Length of a projected line, metres. */
 function lineLength(points: Pt[]): number {
@@ -104,6 +169,12 @@ function lineLength(points: Pt[]): number {
  * Each class costs printed area equal to its total length times its printed
  * width. Take classes while the running total stays under the limit; always
  * keep the most important one, so a layer that is on never renders as nothing.
+ *
+ * The first class that does not fit ends the list. Skipping it and carrying on
+ * looked thriftier but produced nonsense cartography — on an 11 km Islamabad
+ * model it dropped residential streets, then bought `track` and `pedestrian`
+ * with the change, so the print showed footpaths through suburbs whose roads
+ * were missing. A map is read top-down: cut the tail, never the middle.
  */
 export function selectLegibleSubtypes(
   ordered: string[],
@@ -117,14 +188,17 @@ export function selectLegibleSubtypes(
   const budget_mm2 = modelArea_mm2 * COVERAGE_LIMIT;
   let spent = 0;
 
-  for (const subtype of ordered) {
+  for (let i = 0; i < ordered.length; i++) {
+    const subtype = ordered[i];
     const length_m = lengthBySubtype.get(subtype);
     if (length_m === undefined || length_m <= 0) continue;
 
     const area_mm2 = length_m * scale_mm_per_m * printedWidth_mm(subtype);
     if (kept.size > 0 && spent + area_mm2 > budget_mm2) {
-      dropped.push(subtype);
-      continue;
+      for (const rest of ordered.slice(i)) {
+        if ((lengthBySubtype.get(rest) ?? 0) > 0) dropped.push(rest);
+      }
+      break;
     }
     kept.add(subtype);
     spent += area_mm2;
@@ -283,14 +357,18 @@ export function buildLineLayer(
     drownedSegments: 0,
     widthClamped: false,
     width_mm: 0,
+    narrowestWidth_mm: Infinity,
     droppedSubtypes: [],
   };
 
-  if (!settings?.enabled || features.length === 0) return { part: null, stats };
+  if (!settings?.enabled || features.length === 0) {
+    stats.narrowestWidth_mm = 0;
+    return { part: null, stats };
+  }
 
   const { heightfield, scale } = options;
   const terrainStep_m = Math.max(heightfield.spacingX_m, heightfield.spacingY_m);
-  const minWidth_mm = Math.max(settings.minWidth_mm, 2 * options.nozzleDiameter_mm);
+  const minWidth_mm = resolveMinWidth_mm(settings.minWidth_mm, options.nozzleDiameter_mm);
   const height_mm = Math.max(0.1, settings.height_mm * settings.heightScale);
   const penetration_mm = Math.max(1.0, height_mm * 0.5);
   const minBottom_mm = Math.min(0.2, options.baseThickness_mm / 2);
@@ -300,13 +378,11 @@ export function buildLineLayer(
   // ribbon fields into two or three networks.
   const byWidth = new Map<number, { width_mm: number; lines: Pt[][]; bridges: Pt[][] }>();
 
-  const widthFor = (width_m: number) =>
-    Math.max(minWidth_mm, width_m * scale.scale * settings.widthScale);
-
   // Decide which classes the model can carry before building anything.
   const projected = new Map<LineFeature, Pt[]>();
   const lengthBySubtype = new Map<string, number>();
-  const widthBySubtype = new Map<string, number>();
+  const naturalBySubtype = new Map<string, number>();
+  let narrowest_m = Infinity;
 
   for (const feature of features) {
     if (settings.subtypes.length > 0 && !settings.subtypes.includes(feature.subtype)) continue;
@@ -317,7 +393,19 @@ export function buildLineLayer(
       feature.subtype,
       (lengthBySubtype.get(feature.subtype) ?? 0) + lineLength(points),
     );
-    widthBySubtype.set(feature.subtype, widthFor(feature.width_m));
+    naturalBySubtype.set(feature.subtype, feature.width_m);
+    if (feature.width_m > 0) narrowest_m = Math.min(narrowest_m, feature.width_m);
+  }
+
+  // The ladder is anchored on the narrowest class actually present, so a
+  // selection holding only motorways prints them at the floor rather than
+  // several times it.
+  const widthFor = (width_m: number) =>
+    ladderWidth_mm(width_m, narrowest_m, minWidth_mm, scale.scale) * settings.widthScale;
+
+  const widthBySubtype = new Map<string, number>();
+  for (const [subtype, natural_m] of naturalBySubtype) {
+    widthBySubtype.set(subtype, widthFor(natural_m));
   }
 
   const modelArea_mm2 =
@@ -340,9 +428,10 @@ export function buildLineLayer(
     if (!selection.kept.has(feature.subtype)) continue;
 
     const natural_mm = feature.width_m * scale.scale * settings.widthScale;
-    const width_mm = Math.max(minWidth_mm, natural_mm);
-    if (natural_mm < minWidth_mm) stats.widthClamped = true;
+    const width_mm = widthFor(feature.width_m);
+    if (width_mm > natural_mm + 1e-6) stats.widthClamped = true;
     stats.width_mm = Math.max(stats.width_mm, width_mm);
+    stats.narrowestWidth_mm = Math.min(stats.narrowestWidth_mm, width_mm);
 
     // Quantise so near-identical widths share a field.
     const bucket = Math.round(width_mm * 20) / 20;
@@ -365,7 +454,10 @@ export function buildLineLayer(
     }
   }
 
-  if (byWidth.size === 0) return { part: null, stats };
+  if (byWidth.size === 0) {
+    stats.narrowestWidth_mm = 0;
+    return { part: null, stats };
+  }
 
   const drapeZ = (x_m: number, y_m: number) =>
     worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2];

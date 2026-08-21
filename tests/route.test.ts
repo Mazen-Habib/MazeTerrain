@@ -301,9 +301,11 @@ describe('penetration and width rules', () => {
     expect(penetrationFor(4)).toBe(2);
   });
 
-  it('sets the minimum printable width at two nozzles', () => {
-    expect(minPrintableWidth_mm(0.4)).toBe(0.8);
-    expect(minPrintableWidth_mm(0.6)).toBeCloseTo(1.2, 10);
+  // One nozzle, not two: a route is a ridge on solid base, so the slicer lays a
+  // single extrusion. Two is the free-standing-wall rule.
+  it('sets the minimum printable width at one nozzle', () => {
+    expect(minPrintableWidth_mm(0.4)).toBe(0.4);
+    expect(minPrintableWidth_mm(0.6)).toBeCloseTo(0.6, 10);
   });
 });
 
@@ -396,7 +398,7 @@ describe('buildRouteSolid', () => {
   it('clamps a sub-nozzle width and says so', () => {
     const built = buildRouteSolid(routeFrom(straightLine(20, 150), { width_mm: 0.3 }), options);
     expect(built.stats.widthClamped).toBe(true);
-    expect(built.stats.width_mm).toBe(0.8);
+    expect(built.stats.width_mm).toBe(0.4);
   });
 
   it('leaves a printable width alone', () => {

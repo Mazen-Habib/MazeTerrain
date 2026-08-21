@@ -12,6 +12,8 @@ import { NumberField } from './NumberField';
 interface LayersPanelProps {
   layers: Record<string, LayerSettings>;
   busy: boolean;
+  /** Drives the "auto" min-width hint, so the panel shows the number in force. */
+  nozzleDiameter_mm: number;
   onChange: (id: LayerId, patch: Partial<LayerSettings>) => void;
 }
 
@@ -31,7 +33,7 @@ const GLYPH: Record<LayerId, string> = {
 /** Layers whose geometry is not built yet, so the toggle cannot mislead. */
 const NOT_YET_BUILT = new Set<LayerId>(['water', 'buildings', 'greenery', 'sand']);
 
-export function LayersPanel({ layers, busy, onChange }: LayersPanelProps) {
+export function LayersPanel({ layers, busy, nozzleDiameter_mm, onChange }: LayersPanelProps) {
   const [expanded, setExpanded] = useState<LayerId | null>(null);
 
   return (
@@ -111,6 +113,43 @@ export function LayersPanel({ layers, busy, onChange }: LayersPanelProps) {
                     onChange={(v) => onChange(definition.id, { widthScale: v })}
                     hint="Real-world widths come from the road class, not the sparse width tag."
                   />
+
+                  <div className="field">
+                    <label className="field__label">
+                      Min width<span className="field__unit">mm</span>
+                    </label>
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={settings.minWidth_mm === 'auto'}
+                        disabled={busy}
+                        onChange={(e) =>
+                          onChange(definition.id, {
+                            minWidth_mm: e.target.checked ? 'auto' : nozzleDiameter_mm,
+                          })
+                        }
+                      />
+                      Auto ({nozzleDiameter_mm.toFixed(2)} mm, one nozzle)
+                    </label>
+                  </div>
+                  {settings.minWidth_mm === 'auto' ? null : (
+                    <NumberField
+                      label="Narrowest line"
+                      unit="mm"
+                      value={settings.minWidth_mm}
+                      min={0.05}
+                      max={3}
+                      step={0.05}
+                      disabled={busy}
+                      onChange={(v) => onChange(definition.id, { minWidth_mm: v })}
+                      hint={
+                        settings.minWidth_mm < nozzleDiameter_mm
+                          ? `Below your ${nozzleDiameter_mm} mm nozzle. Finer detail, but an FDM ` +
+                            `slicer will drop these lines — fine for resin or for a render.`
+                          : 'The narrowest class prints at this width; wider classes scale up from it.'
+                      }
+                    />
+                  )}
 
                   <label className="checkbox">
                     <input

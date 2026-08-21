@@ -330,20 +330,37 @@ export async function assemble(
             level: 'warn',
             code: 'classes-below-nozzle',
             message:
-              `At this size a ${config.nozzleDiameter_mm} mm nozzle cannot print ` +
-              `${built.stats.droppedSubtypes.join(', ')}, so they were left out. ` +
-              `Print the model larger or select a smaller area to include them.`,
+              `${built.stats.droppedSubtypes.join(', ')} were left out — at this size ` +
+              `they would fill the model rather than read as streets. Print larger, ` +
+              `select a smaller area, or turn off "Only classes the model can carry".`,
           });
         }
+
+        const label = LAYER_BY_ID[layer].label.toLowerCase();
 
         if (built.stats.widthClamped) {
           warnings.push({
             level: 'warn',
             code: 'feature-width-clamped',
             message:
-              `Some ${LAYER_BY_ID[layer].label.toLowerCase()} were widened to ` +
-              `${(2 * config.nozzleDiameter_mm).toFixed(1)} mm, the minimum a ` +
-              `${config.nozzleDiameter_mm} mm nozzle can print. They will look wider than scale.`,
+              `${LAYER_BY_ID[layer].label} are drawn wider than true scale, ` +
+              `${built.stats.narrowestWidth_mm.toFixed(2)}–${built.stats.width_mm.toFixed(2)} mm, ` +
+              `so the narrowest class still prints. Classes stay in proportion to each other.`,
+          });
+        }
+
+        // The floor is the user's to set, so say plainly when it is under the
+        // nozzle rather than silently raising it back up.
+        if (built.stats.narrowestWidth_mm > 0 &&
+            built.stats.narrowestWidth_mm < config.nozzleDiameter_mm - 1e-6) {
+          warnings.push({
+            level: 'warn',
+            code: 'feature-below-nozzle',
+            message:
+              `The narrowest ${label} print at ` +
+              `${built.stats.narrowestWidth_mm.toFixed(2)} mm, under your ` +
+              `${config.nozzleDiameter_mm} mm nozzle. An FDM slicer will drop them; ` +
+              `raise "Min width" in the layer if you are printing this.`,
           });
         }
 
