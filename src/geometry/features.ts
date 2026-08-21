@@ -45,12 +45,24 @@ export interface BuildFeaturesOptions {
   nozzleDiameter_mm: number;
   baseThickness_mm: number;
   layers: Record<string, LayerSettings>;
+  /**
+   * Triangles this layer may spend.
+   *
+   * Without a budget a dense city silently tries to build millions of triangles
+   * and dies inside V8 with "Map maximum size exceeded" — a JS Map caps at
+   * 16 777 216 entries, and the edge maps in validation and extrusion hold
+   * roughly 1.5 per triangle. Stopping early with an explanation beats a
+   * RangeError from the engine.
+   */
+  triangleBudget: number;
 }
 
 export interface FeatureBuildStats {
   layer: LayerId;
   features: number;
   triangles: number;
+  /** True when the budget stopped this layer before every feature was built. */
+  truncated: boolean;
   /** Segments deleted for running through water without a bridge tag. */
   drownedSegments: number;
   widthClamped: boolean;
@@ -203,6 +215,7 @@ export function buildLineLayer(
     layer,
     features: 0,
     triangles: 0,
+    truncated: false,
     drownedSegments: 0,
     widthClamped: false,
     width_mm: 0,
@@ -218,8 +231,13 @@ export function buildLineLayer(
   const minBottom_mm = Math.min(0.2, options.baseThickness_mm / 2);
 
   const solids: SolidMesh[] = [];
+  let spent = 0;
 
   for (const feature of features) {
+    if (spent >= options.triangleBudget) {
+      stats.truncated = true;
+      break;
+    }
     if (settings.subtypes.length > 0 && !settings.subtypes.includes(feature.subtype)) continue;
 
     const projected = projectLine(feature.points, scale);
@@ -266,6 +284,7 @@ export function buildLineLayer(
 
       if (mesh.triangles > 0) {
         solids.push(mesh);
+        spent += mesh.triangles;
         stats.features++;
       }
     }

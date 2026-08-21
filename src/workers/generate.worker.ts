@@ -30,6 +30,23 @@ const api = {
     try {
       const bundle = await assemble(request, onProgress, controller.signal);
       return Comlink.transfer(bundle, transferables(bundle));
+    } catch (err) {
+      // V8 throws "Map maximum size exceeded" (a Map caps at 16 777 216 entries)
+      // and "Invalid array length" when the geometry outgrows what the engine
+      // can hold. Neither tells the user anything, and both mean the same thing.
+      const message = err instanceof Error ? err.message : String(err);
+      if (
+        err instanceof RangeError ||
+        /maximum size exceeded|Invalid array length|Array buffer allocation failed/i.test(message)
+      ) {
+        const wrapped = new Error(
+          'This selection produces more geometry than the browser can hold. ' +
+            'Reduce the area, or turn off some feature layers.',
+        );
+        (wrapped as Error & { userMessage: string }).userMessage = wrapped.message;
+        throw wrapped;
+      }
+      throw err;
     } finally {
       controller = null;
     }

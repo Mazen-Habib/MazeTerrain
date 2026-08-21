@@ -153,6 +153,7 @@ describe('buildLineLayer', () => {
     nozzleDiameter_mm: 0.4,
     baseThickness_mm: 3,
     layers,
+    triangleBudget: 5_000_000,
   };
 
   /** The builder works in lon/lat, so synthetic metres go back through the projection. */
@@ -292,5 +293,65 @@ describe('groupLines', () => {
     expect(grouped.get('roads')).toHaveLength(2);
     expect(grouped.get('railways')).toHaveLength(1);
     expect(grouped.get('water')).toBeUndefined();
+  });
+});
+
+/**
+ * docs/08-pitfalls.md#feature-triangle-explosion — a 249 km2 selection over
+ * Islamabad and Rawalpindi with roads on died inside V8 with
+ * "Map maximum size exceeded", because a JS Map caps at 16 777 216 entries and
+ * the edge maps hold roughly 1.5 per triangle.
+ */
+describe('triangle budget', () => {
+  const layers = defaultLayers();
+
+  function manyRoads(count: number): LineFeature[] {
+    const out: LineFeature[] = [];
+    for (let i = 0; i < count; i++) {
+      const y = -2500 + i * 40;
+      out.push({
+        layer: 'roads',
+        subtype: 'primary',
+        width_m: 12,
+        bridge: false,
+        layerOrder: 0,
+        points: [
+          [-2500, y],
+          [2500, y],
+        ].map((p) => unprojectENU(p[0], p[1], scale.origin)),
+      });
+    }
+    return out;
+  }
+
+  it('stops early and says so rather than letting the engine run out', () => {
+    const built = buildLineLayer('roads', manyRoads(40), [], {
+      heightfield: hf,
+      scale,
+      selection: null,
+      nozzleDiameter_mm: 0.4,
+      baseThickness_mm: 3,
+      layers,
+      triangleBudget: 5000,
+    });
+
+    expect(built.stats.truncated).toBe(true);
+    expect(built.stats.features).toBeLessThan(40);
+    // Whatever it did build is still a usable, closed solid.
+    expect(validateMesh(built.part!.positions, built.part!.indices).manifold).toBe(true);
+  });
+
+  it('builds everything when the budget is ample', () => {
+    const built = buildLineLayer('roads', manyRoads(4), [], {
+      heightfield: hf,
+      scale,
+      selection: null,
+      nozzleDiameter_mm: 0.4,
+      baseThickness_mm: 3,
+      layers,
+      triangleBudget: 5_000_000,
+    });
+    expect(built.stats.truncated).toBe(false);
+    expect(built.stats.features).toBe(4);
   });
 });

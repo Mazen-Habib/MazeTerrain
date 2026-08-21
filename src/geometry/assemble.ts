@@ -45,6 +45,18 @@ const ROUTES_END = 92;
 /** Never drop below this looking for coverage; the model would be meaningless. */
 const MIN_DEM_ZOOM = 6;
 
+/**
+ * Triangles the OSM feature layers may spend between them.
+ *
+ * A JavaScript Map holds at most 16 777 216 entries, and the edge maps in
+ * validation and extrusion hold roughly 1.5 per triangle, so a build that emits
+ * more than about 11 M triangles dies inside V8 with "Map maximum size
+ * exceeded" — an engine error that tells the user nothing. This budget stops
+ * well short of it and explains itself.
+ * See docs/08-pitfalls.md#feature-triangle-explosion.
+ */
+const FEATURE_TRIANGLE_BUDGET = 2_000_000;
+
 export async function assemble(
   request: GenerateRequest,
   onProgress?: ProgressCallback,
@@ -273,7 +285,9 @@ export async function assemble(
         nozzleDiameter_mm: config.nozzleDiameter_mm,
         baseThickness_mm: config.baseThickness_mm,
         layers: config.layers,
+        triangleBudget: FEATURE_TRIANGLE_BUDGET,
       };
+      let featureTriangles = 0;
 
       let done = 0;
       for (const layer of enabledLayers) {
@@ -292,8 +306,24 @@ export async function assemble(
           continue;
         }
 
-        const built = buildLineLayer(layer, lines, water, featureOptions);
+        const remaining = Math.max(0, FEATURE_TRIANGLE_BUDGET - featureTriangles);
+        const built = buildLineLayer(layer, lines, water, {
+          ...featureOptions,
+          triangleBudget: remaining,
+        });
         if (built.part) featureParts.push(built.part);
+        featureTriangles += built.stats.triangles;
+
+        if (built.stats.truncated) {
+          warnings.push({
+            level: 'warn',
+            code: 'feature-budget-reached',
+            message:
+              `This area has more ${LAYER_BY_ID[layer].label.toLowerCase()} than the model can ` +
+              `carry, so some were left out after ${FEATURE_TRIANGLE_BUDGET.toLocaleString()} ` +
+              `triangles. Reduce the selection area, or turn off layers you do not need.`,
+          });
+        }
 
         if (built.stats.widthClamped) {
           warnings.push({
