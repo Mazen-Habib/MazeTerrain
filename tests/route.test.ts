@@ -524,3 +524,87 @@ describe('selection', () => {
     expect(fitSelectionToRoutes(routes)).toBeNull();
   });
 });
+
+/**
+ * docs/08-pitfalls.md#unclosed-contour-chains — spires standing out of a dense
+ * city model. A marching-squares chain that runs out of continuations was still
+ * pushed as a ring, which gave it an implicit closing edge from its last point
+ * back to its first, right across the feature.
+ */
+describe('ring closure', () => {
+  it('encloses no more area than the band itself covers', () => {
+    // A dense, self-touching tangle: the input that makes chains break. A
+    // partial chain pushed as a ring encloses a region the band never covered,
+    // so total area is the tell.
+    const tangle: Pt[] = [];
+    let length_m = 0;
+    for (let i = 0; i < 900; i++) {
+      const t = (i / 900) * Math.PI * 12;
+      tangle.push([Math.cos(t) * (300 + Math.sin(t * 3.7) * 130), Math.sin(t * 1.4) * 320]);
+      if (i > 0) {
+        length_m += Math.hypot(
+          tangle[i][0] - tangle[i - 1][0],
+          tangle[i][1] - tangle[i - 1][1],
+        );
+      }
+    }
+
+    const width_m = 26;
+    const result = buildRibbonField(tangle, width_m);
+    expect(result.polygons.length).toBeGreaterThan(0);
+
+    // length x width is a hard upper bound for a band that overlaps itself
+    // constantly; the real figure is far lower.
+    const area = multiPolygonArea(result.polygons);
+    expect(area).toBeGreaterThan(0);
+    expect(area).toBeLessThan(length_m * width_m);
+  });
+
+  it('keeps a tangle manifold once unclosed chains are dropped', () => {
+    const hf3 = makeHeightfield(40, 40, () => 200);
+    const scale3 = scaleFor(hf3);
+    const tangle: Pt[] = [];
+    for (let i = 0; i < 600; i++) {
+      const t = (i / 600) * Math.PI * 9;
+      tangle.push([Math.cos(t) * (500 + Math.sin(t * 4.3) * 200), Math.sin(t * 1.7) * 480]);
+    }
+    const R = 6378137;
+    const DEG = Math.PI / 180;
+    const built = buildRouteSolid(
+      {
+        id: 'tangle',
+        name: 'Tangle',
+        points: tangle.map(([x, y]) => ({
+          lon: scale3.origin.lon0 + x / (R * DEG * scale3.origin.cosLat0),
+          lat: scale3.origin.lat0 + y / (R * DEG),
+        })),
+        distance_m: 0,
+        elevationGain_m: null,
+        bbox: { west: 0, south: 0, east: 0, north: 0 },
+        style: defaultRouteStyle(),
+      },
+      { heightfield: hf3, scale: scale3, selection: null, nozzleDiameter_mm: 0.4, baseThickness_mm: 3 },
+    );
+
+    expect(built.mesh.triangles).toBeGreaterThan(0);
+    const v = validateMesh(built.mesh.positions, built.mesh.indices);
+    expect(v.openEdges).toBe(0);
+    expect(v.manifold).toBe(true);
+
+    // The spire itself: a blade reaching across the model. Every triangle edge
+    // must stay within a few ribbon widths.
+    const p = built.mesh.positions;
+    const ix = built.mesh.indices;
+    const limit_mm = built.stats.width_mm * 8;
+    let longest = 0;
+    for (let i = 0; i < ix.length; i += 3) {
+      for (let e = 0; e < 3; e++) {
+        const a = ix[i + e] * 3;
+        const b = ix[i + ((e + 1) % 3)] * 3;
+        const d = Math.hypot(p[b] - p[a], p[b + 1] - p[a + 1], p[b + 2] - p[a + 2]);
+        if (d > longest) longest = d;
+      }
+    }
+    expect(longest).toBeLessThan(limit_mm);
+  });
+});

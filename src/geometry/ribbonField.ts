@@ -249,20 +249,30 @@ function chainRings(segments: Seg[], cell: number): Ring[] {
     const ring: Ring = [];
     let current: Seg | undefined = seed;
     const startKey = key(seed.from);
+    let closed = false;
 
     while (current && !used.has(current)) {
       used.add(current);
       ring.push([current.from[0], current.from[1]]);
 
       const nextKey = key(current.to);
-      if (nextKey === startKey) break;
+      if (nextKey === startKey) {
+        closed = true;
+        break;
+      }
 
       const candidates = outgoing.get(nextKey);
       current = candidates?.find((s) => !used.has(s));
     }
 
-    // Rings shorter than a triangle are numerical dust.
-    if (ring.length >= 3) rings.push(ring);
+    // Only a chain that returned to its start is a ring. The loop can also end
+    // because it ran out of continuations, or walked into a segment another
+    // chain already took — both leave a PARTIAL chain, and pushing that as a
+    // ring gives it an implicit closing edge straight from its last point back
+    // to its first, across the whole feature. Extruded, that edge becomes a long
+    // thin blade standing out of the model.
+    // See docs/08-pitfalls.md#unclosed-contour-chains.
+    if (closed && ring.length >= 3) rings.push(ring);
   }
 
   return rings;

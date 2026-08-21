@@ -11,6 +11,7 @@
  */
 import type { BBox } from '../../geometry/types';
 import type { LayerId } from './tags';
+import { idbGet, idbPut, OSM_STORE } from '../idb';
 
 export const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -24,9 +25,6 @@ const BASE_BACKOFF_MS = 1500;
 /** docs/03-architecture.md caching table: OSM responses for 7 days. */
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-const DB_NAME = 'mazeterrain';
-const DB_VERSION = 2;
-const STORE = 'osm-extracts';
 
 export class OverpassError extends Error {
   readonly userMessage: string;
@@ -109,70 +107,21 @@ export function extractKey(bbox: BBox, layers: LayerId[]): string {
   return `osm:${box}:${[...layers].sort().join('+')}`;
 }
 
-let dbPromise: Promise<IDBDatabase | null> | null = null;
-
-function openDb(): Promise<IDBDatabase | null> {
-  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
-  if (dbPromise) return dbPromise;
-
-  dbPromise = new Promise((resolve) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      // The DEM store belongs to the same database; do not drop it on upgrade.
-      if (!db.objectStoreNames.contains('dem-tiles')) {
-        db.createObjectStore('dem-tiles', { keyPath: 'key' });
-      }
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'key' });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => resolve(null);
-    req.onblocked = () => resolve(null);
-  });
-
-  return dbPromise;
+interface CachedExtract {
+  key: string;
+  data: OverpassResponse;
+  storedAt: number;
 }
 
 async function readCache(key: string): Promise<OverpassResponse | null> {
-  const db = await openDb();
-  if (!db) return null;
-
-  return new Promise((resolve) => {
-    let tx: IDBTransaction;
-    try {
-      tx = db.transaction(STORE, 'readonly');
-    } catch {
-      resolve(null);
-      return;
-    }
-    const req = tx.objectStore(STORE).get(key);
-    req.onsuccess = () => {
-      const row = req.result as { data: OverpassResponse; storedAt: number } | undefined;
-      if (!row || Date.now() - row.storedAt > TTL_MS) return resolve(null);
-      resolve(row.data);
-    };
-    req.onerror = () => resolve(null);
-  });
+  const row = await idbGet<CachedExtract>(OSM_STORE, key);
+  if (!row) return null;
+  if (Date.now() - row.storedAt > TTL_MS) return null;
+  return row.data;
 }
 
 async function writeCache(key: string, data: OverpassResponse): Promise<void> {
-  const db = await openDb();
-  if (!db) return;
-  return new Promise((resolve) => {
-    let tx: IDBTransaction;
-    try {
-      tx = db.transaction(STORE, 'readwrite');
-    } catch {
-      resolve();
-      return;
-    }
-    tx.objectStore(STORE).put({ key, data, storedAt: Date.now() });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-    tx.onabort = () => resolve();
-  });
+  await idbPut(OSM_STORE, { key, data, storedAt: Date.now() } satisfies CachedExtract);
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
