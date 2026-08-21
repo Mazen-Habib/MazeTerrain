@@ -16,13 +16,13 @@
  * A road diving under a river is the classic artefact.
  */
 import type { LineFeature, PolygonFeature } from '../data/osm/normalise';
-import type { LayerId } from '../data/osm/tags';
+import { LAYER_BY_ID, type LayerId } from '../data/osm/tags';
 import type { Pt } from '../data/gpx/simplify';
 import { resample, simplifyPoints, toleranceForScale } from '../data/gpx/simplify';
 import { projectENU, worldToPrint, type ResolvedScale } from './coords';
 import { extrudeDraped, type SolidMesh } from './extrude';
 import { sampleHeightfieldAt, type Heightfield } from './heightfield';
-import type { Ring } from './polygons';
+import type { MultiPolygon, Ring } from './polygons';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
 import { pointInRing } from './route';
 import type { MeshPart } from './types';
@@ -36,6 +36,18 @@ export interface LayerSettings {
   widthScale: number;
   minWidth_mm: number;
   subtypes: string[];
+  /**
+   * Keep only as many classes as the model can legibly carry.
+   *
+   * Below a nozzle width nothing prints at true scale, so every road on a large
+   * model is exaggerated — the question is how many classes to exaggerate before
+   * the result is a solid mass rather than a map. At 21 km across, every road
+   * class clamped to 0.8 mm would cover ~95% of a 100 mm model. Classes are
+   * taken in importance order until printed coverage reaches its limit, so a
+   * city shows motorways and primaries while a neighbourhood shows every lane.
+   * See docs/08-pitfalls.md#sub-nozzle-classes-become-porridge.
+   */
+  legibilityFilter: boolean;
 }
 
 export interface BuildFeaturesOptions {
@@ -67,6 +79,58 @@ export interface FeatureBuildStats {
   drownedSegments: number;
   widthClamped: boolean;
   width_mm: number;
+  /** Classes left out because they are narrower than the nozzle at this scale. */
+  droppedSubtypes: string[];
+}
+
+/**
+ * Share of the model's footprint one line layer may cover before it stops
+ * reading as a map. A quarter is generous — at a third, a street grid closes up.
+ */
+const COVERAGE_LIMIT = 0.25;
+
+/** Length of a projected line, metres. */
+function lineLength(points: Pt[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+  }
+  return total;
+}
+
+/**
+ * Choose which classes the model can carry, in importance order.
+ *
+ * Each class costs printed area equal to its total length times its printed
+ * width. Take classes while the running total stays under the limit; always
+ * keep the most important one, so a layer that is on never renders as nothing.
+ */
+export function selectLegibleSubtypes(
+  ordered: string[],
+  lengthBySubtype: Map<string, number>,
+  printedWidth_mm: (subtype: string) => number,
+  scale_mm_per_m: number,
+  modelArea_mm2: number,
+): { kept: Set<string>; dropped: string[] } {
+  const kept = new Set<string>();
+  const dropped: string[] = [];
+  const budget_mm2 = modelArea_mm2 * COVERAGE_LIMIT;
+  let spent = 0;
+
+  for (const subtype of ordered) {
+    const length_m = lengthBySubtype.get(subtype);
+    if (length_m === undefined || length_m <= 0) continue;
+
+    const area_mm2 = length_m * scale_mm_per_m * printedWidth_mm(subtype);
+    if (kept.size > 0 && spent + area_mm2 > budget_mm2) {
+      dropped.push(subtype);
+      continue;
+    }
+    kept.add(subtype);
+    spent += area_mm2;
+  }
+
+  return { kept, dropped };
 }
 
 /** A run of consecutive points kept after the water split. */
@@ -219,6 +283,7 @@ export function buildLineLayer(
     drownedSegments: 0,
     widthClamped: false,
     width_mm: 0,
+    droppedSubtypes: [],
   };
 
   if (!settings?.enabled || features.length === 0) return { part: null, stats };
@@ -230,38 +295,150 @@ export function buildLineLayer(
   const penetration_mm = Math.max(1.0, height_mm * 0.5);
   const minBottom_mm = Math.min(0.2, options.baseThickness_mm / 2);
 
-  const solids: SolidMesh[] = [];
-  let spent = 0;
+  // Group every centreline by the printed width it resolves to. There are only
+  // a handful of distinct road widths, so this turns thousands of separate
+  // ribbon fields into two or three networks.
+  const byWidth = new Map<number, { width_mm: number; lines: Pt[][]; bridges: Pt[][] }>();
+
+  const widthFor = (width_m: number) =>
+    Math.max(minWidth_mm, width_m * scale.scale * settings.widthScale);
+
+  // Decide which classes the model can carry before building anything.
+  const projected = new Map<LineFeature, Pt[]>();
+  const lengthBySubtype = new Map<string, number>();
+  const widthBySubtype = new Map<string, number>();
 
   for (const feature of features) {
-    if (spent >= options.triangleBudget) {
-      stats.truncated = true;
-      break;
-    }
     if (settings.subtypes.length > 0 && !settings.subtypes.includes(feature.subtype)) continue;
+    const points = projectLine(feature.points, scale);
+    if (points.length < 2) continue;
+    projected.set(feature, points);
+    lengthBySubtype.set(
+      feature.subtype,
+      (lengthBySubtype.get(feature.subtype) ?? 0) + lineLength(points),
+    );
+    widthBySubtype.set(feature.subtype, widthFor(feature.width_m));
+  }
 
-    const projected = projectLine(feature.points, scale);
-    if (projected.length < 2) continue;
+  const modelArea_mm2 =
+    scale.extentX_m * scale.scale * (scale.extentY_m * scale.scale);
+  const selection = settings.legibilityFilter
+    ? selectLegibleSubtypes(
+        LAYER_BY_ID[layer].subtypes,
+        lengthBySubtype,
+        (subtype) => widthBySubtype.get(subtype) ?? minWidth_mm,
+        scale.scale,
+        modelArea_mm2,
+      )
+    : { kept: new Set(lengthBySubtype.keys()), dropped: [] as string[] };
 
-    const { segments, drowned } = splitAgainstWater(projected, feature.bridge, water);
-    stats.drownedSegments += drowned;
+  stats.droppedSubtypes = selection.dropped;
 
-    // Width lives in print space so a motorway is legible at any model size, and
-    // is clamped to two nozzles or the slicer drops it entirely
-    // (docs/08-pitfalls.md#sub-nozzle-features).
+  for (const feature of features) {
+    const projectedPoints = projected.get(feature);
+    if (!projectedPoints) continue;
+    if (!selection.kept.has(feature.subtype)) continue;
+
     const natural_mm = feature.width_m * scale.scale * settings.widthScale;
     const width_mm = Math.max(minWidth_mm, natural_mm);
     if (natural_mm < minWidth_mm) stats.widthClamped = true;
     stats.width_mm = Math.max(stats.width_mm, width_mm);
-    const width_m = width_mm / scale.scale;
+
+    // Quantise so near-identical widths share a field.
+    const bucket = Math.round(width_mm * 20) / 20;
+    let group = byWidth.get(bucket);
+    if (!group) {
+      group = { width_mm: bucket, lines: [], bridges: [] };
+      byWidth.set(bucket, group);
+    }
+
+    const { segments, drowned } = splitAgainstWater(projectedPoints, feature.bridge, water);
+    stats.drownedSegments += drowned;
 
     for (const segment of segments) {
-      // Twice the route's budget: 0.3 print mm of deviation is invisible on a
-      // road and roughly halves the point count.
       const simplified = simplifyPoints(segment.points, 2 * toleranceForScale(scale.scale));
-      const centreline = resample(simplified, terrainStep_m);
-      if (centreline.length < 2) continue;
+      if (simplified.length < 2) continue;
+      // Bridges need their own flat deck, so they cannot share a network field.
+      if (segment.bridge) group.bridges.push(simplified);
+      else group.lines.push(simplified);
+      stats.features++;
+    }
+  }
 
+  if (byWidth.size === 0) return { part: null, stats };
+
+  const drapeZ = (x_m: number, y_m: number) =>
+    worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2];
+
+  const extrudeOptions = {
+    height_mm,
+    penetration_mm,
+    minBottom_mm,
+    // No subdivision. The contour is already sampled at a third of the ribbon's
+    // half-width, and the solid digs penetration_mm into the terrain — which at
+    // any city scale is far more than the chord error across a ribbon a couple
+    // of millimetres wide. Uniform subdivision quadrupled every triangle to buy
+    // accuracy the penetration already covers.
+    maxEdge_m: Infinity,
+  };
+
+  const solids: SolidMesh[] = [];
+  let spent = 0;
+
+  /**
+   * Triangles a contour will cost, before paying for them.
+   *
+   * Merging a layer into one network means there is no per-feature point to
+   * stop at any more, so the budget has to be checked against an estimate up
+   * front. Every ring point becomes a top triangle, a bottom triangle and two
+   * wall triangles.
+   */
+  const estimateTriangles = (polygons: MultiPolygon): number => {
+    let points = 0;
+    for (const poly of polygons) for (const ring of poly) points += ring.length;
+    return points * 4;
+  };
+
+  for (const group of byWidth.values()) {
+    if (spent >= options.triangleBudget) {
+      stats.truncated = true;
+      break;
+    }
+
+    const width_m = group.width_mm / scale.scale;
+
+    if (group.lines.length > 0) {
+      const ribbon = buildRibbonField(
+        group.lines,
+        width_m,
+        options.selection,
+        FEATURE_CELLS_PER_HALF_WIDTH,
+      );
+      if (ribbon.polygons.length > 0) {
+        if (spent + estimateTriangles(ribbon.polygons) > options.triangleBudget) {
+          stats.truncated = true;
+          break;
+        }
+        const mesh = extrudeDraped(
+          ribbon.polygons,
+          drapeZ,
+          (x_m, y_m) => [x_m * scale.scale, y_m * scale.scale],
+          extrudeOptions,
+        );
+        if (mesh.triangles > 0) {
+          solids.push(mesh);
+          spent += mesh.triangles;
+        }
+      }
+    }
+
+    // Each bridge keeps its own field and its own flat deck.
+    for (const bridge of group.bridges) {
+      if (spent >= options.triangleBudget) {
+        stats.truncated = true;
+        break;
+      }
+      const centreline = resample(bridge, terrainStep_m);
       const ribbon = buildRibbonField(
         centreline,
         width_m,
@@ -269,23 +446,20 @@ export function buildLineLayer(
         FEATURE_CELLS_PER_HALF_WIDTH,
       );
       if (ribbon.polygons.length === 0) continue;
-
-      const sampleTerrainZ = segment.bridge
-        ? bridgeSampler(centreline, heightfield, scale)
-        : (x_m: number, y_m: number) =>
-            worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2];
+      if (spent + estimateTriangles(ribbon.polygons) > options.triangleBudget) {
+        stats.truncated = true;
+        break;
+      }
 
       const mesh = extrudeDraped(
         ribbon.polygons,
-        sampleTerrainZ,
+        bridgeSampler(centreline, heightfield, scale),
         (x_m, y_m) => [x_m * scale.scale, y_m * scale.scale],
-        { height_mm, penetration_mm, minBottom_mm, maxEdge_m: terrainStep_m },
+        extrudeOptions,
       );
-
       if (mesh.triangles > 0) {
         solids.push(mesh);
         spent += mesh.triangles;
-        stats.features++;
       }
     }
   }

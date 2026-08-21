@@ -108,6 +108,90 @@ function subdivide(xy: number[], tris: number[], maxEdge: number): number[] {
 }
 
 /**
+ * Split vertices where the surface pinches, so it stops being a bowtie.
+ *
+ * A contour can touch itself at a single point — a road network against the
+ * selection mask does it readily, because masked cells are Infinity and the
+ * interpolation snaps those crossings onto grid corners where two branches meet.
+ * The triangles around such a vertex form two separate fans joined only at the
+ * point. Top, bottom and walls all inherit it, and the vertical wall edge ends
+ * up with four adjacent faces: non-manifold, export blocked.
+ *
+ * Giving each fan its own copy of the vertex costs one duplicated position and
+ * makes the surface a clean 2-manifold. The copies sit at the same coordinates,
+ * so nothing moves.
+ * See docs/08-pitfalls.md#bowtie-vertices-from-touching-contours.
+ */
+function splitBowtieVertices(xy: number[], tris: number[]): void {
+  const vertexCount = xy.length / 2;
+
+  // Triangles incident to each vertex.
+  const incident: number[][] = Array.from({ length: vertexCount }, () => []);
+  for (let t = 0; t < tris.length; t += 3) {
+    for (let e = 0; e < 3; e++) {
+      const v = tris[t + e];
+      if (v < vertexCount) incident[v].push(t);
+    }
+  }
+
+  for (let v = 0; v < vertexCount; v++) {
+    const fan = incident[v];
+    if (fan.length < 2) continue;
+
+    // Two triangles belong to the same fan if they share an edge through v.
+    const partner = new Map<number, number[]>();
+    for (const t of fan) {
+      for (let e = 0; e < 3; e++) {
+        const a = tris[t + e];
+        const b = tris[t + ((e + 1) % 3)];
+        if (a !== v && b !== v) continue;
+        const other = a === v ? b : a;
+        const list = partner.get(other);
+        if (list) list.push(t);
+        else partner.set(other, [t]);
+      }
+    }
+
+    const seen = new Set<number>();
+    let component = 0;
+
+    for (const seed of fan) {
+      if (seen.has(seed)) continue;
+
+      const stack = [seed];
+      const group: number[] = [];
+      seen.add(seed);
+
+      while (stack.length > 0) {
+        const t = stack.pop() as number;
+        group.push(t);
+        for (let e = 0; e < 3; e++) {
+          const a = tris[t + e];
+          const b = tris[t + ((e + 1) % 3)];
+          if (a !== v && b !== v) continue;
+          for (const neighbour of partner.get(a === v ? b : a) ?? []) {
+            if (!seen.has(neighbour)) {
+              seen.add(neighbour);
+              stack.push(neighbour);
+            }
+          }
+        }
+      }
+
+      // The first fan keeps the original vertex; the rest get copies.
+      if (component > 0) {
+        const copy = xy.length / 2;
+        xy.push(xy[v * 2], xy[v * 2 + 1]);
+        for (const t of group) {
+          for (let e = 0; e < 3; e++) if (tris[t + e] === v) tris[t + e] = copy;
+        }
+      }
+      component++;
+    }
+  }
+}
+
+/**
  * Directed boundary edges of a triangulated surface: those belonging to exactly
  * one triangle. Their direction keeps the interior on the left, so outer
  * boundaries come out counter-clockwise and holes clockwise, which is exactly
@@ -163,8 +247,9 @@ export function extrudeDraped(
     const base = earcut(xy, holeIndices, 2);
     if (base.length === 0) continue;
 
-    // `xy` grows as subdivision adds midpoints.
+    // `xy` grows as subdivision adds midpoints, and again if a pinch is split.
     const surface = subdivide(xy, base, options.maxEdge_m);
+    splitBowtieVertices(xy, surface);
     const vertexCount = xy.length / 2;
     const offset = positions.length / 3;
 

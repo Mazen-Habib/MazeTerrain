@@ -325,6 +325,17 @@ export async function assemble(
           });
         }
 
+        if (built.stats.droppedSubtypes.length > 0) {
+          warnings.push({
+            level: 'warn',
+            code: 'classes-below-nozzle',
+            message:
+              `At this size a ${config.nozzleDiameter_mm} mm nozzle cannot print ` +
+              `${built.stats.droppedSubtypes.join(', ')}, so they were left out. ` +
+              `Print the model larger or select a smaller area to include them.`,
+          });
+        }
+
         if (built.stats.widthClamped) {
           warnings.push({
             level: 'warn',

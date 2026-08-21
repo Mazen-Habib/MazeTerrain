@@ -112,6 +112,22 @@ export function LayersPanel({ layers, busy, onChange }: LayersPanelProps) {
                     hint="Real-world widths come from the road class, not the sparse width tag."
                   />
 
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={settings.legibilityFilter}
+                      disabled={busy}
+                      onChange={(e) =>
+                        onChange(definition.id, { legibilityFilter: e.target.checked })
+                      }
+                    />
+                    Only classes the model can carry
+                  </label>
+                  <p className="field__hint">
+                    On by default. Takes classes in importance order until roads would cover a
+                    quarter of the model, which is where a street grid stops reading as a map.
+                  </p>
+
                   <fieldset className="subtypes">
                     <legend className="field__label">Include</legend>
                     {definition.subtypes.map((subtype) => (

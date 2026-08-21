@@ -11,6 +11,8 @@ import type { LineFeature, PolygonFeature } from '../src/data/osm/normalise';
 import type { Pt } from '../src/data/gpx/simplify';
 import type { Ring } from '../src/geometry/polygons';
 import { validateMesh } from '../src/geometry/validate';
+import { buildRibbonField } from '../src/geometry/ribbonField';
+import { extrudeDraped } from '../src/geometry/extrude';
 import { unprojectENU } from '../src/geometry/coords';
 import { defaultLayers } from '../src/config/presets';
 import { makeHeightfield, scaleFor } from './helpers';
@@ -161,7 +163,9 @@ describe('buildLineLayer', () => {
     return {
       layer: 'roads',
       subtype: 'primary',
-      width_m: 12,
+      // 60 m reads as ~1 mm at this synthetic scale, so it clears the nozzle.
+      // A 12 m road here would be 0.2 mm and is now dropped by design.
+      width_m: 60,
       bridge: false,
       layerOrder: 0,
       points: points.map((p) => unprojectENU(p[0], p[1], scale.origin)),
@@ -218,14 +222,49 @@ describe('buildLineLayer', () => {
     expect(built.part).toBeNull();
   });
 
+  /**
+   * docs/08-pitfalls.md#sub-nozzle-classes-become-porridge — classes are taken
+   * in importance order until they would overcrowd the model, so a lone road
+   * always survives however narrow it is.
+   */
+  it('keeps the most important class however narrow it is', () => {
+    const built = buildLineLayer(
+      'roads',
+      [feature([[-1000, 0], [1000, 0]], { width_m: 2, subtype: 'service' })],
+      [],
+      options,
+    );
+    expect(built.stats.droppedSubtypes).toHaveLength(0);
+    expect(built.part).not.toBeNull();
+  });
+
+  it('drops the lesser classes once roads would blanket the model', () => {
+    // A dense grid of residential streets plus one motorway. The motorway is
+    // the important class and must survive; the grid must not blanket the model.
+    const dense: LineFeature[] = [
+      feature([[-2500, 0], [2500, 0]], { width_m: 200, subtype: 'motorway' }),
+    ];
+    for (let i = 0; i < 120; i++) {
+      const y = -2500 + i * 40;
+      dense.push(feature([[-2500, y], [2500, y]], { width_m: 60, subtype: 'residential' }));
+    }
+
+    const built = buildLineLayer('roads', dense, [], options);
+    expect(built.stats.droppedSubtypes).toContain('residential');
+    expect(built.part).not.toBeNull();
+  });
+
   /** docs/08-pitfalls.md#sub-nozzle-features */
-  it('clamps a sub-nozzle width and says so', () => {
-    // A 2 m footpath on this scale is far under two nozzle widths.
+  it('clamps instead when the user asks for it', () => {
+    const keep: Record<string, LayerSettings> = {
+      ...layers,
+      roads: { ...layers.roads, legibilityFilter: false },
+    };
     const built = buildLineLayer(
       'roads',
       [feature([[-1000, 0], [1000, 0]], { width_m: 2 })],
       [],
-      options,
+      { ...options, layers: keep },
     );
     expect(built.stats.widthClamped).toBe(true);
     expect(built.stats.width_mm).toBeGreaterThanOrEqual(0.8);
@@ -305,6 +344,15 @@ describe('groupLines', () => {
 describe('triangle budget', () => {
   const layers = defaultLayers();
 
+  const mkFeature = (points: Pt[]): LineFeature => ({
+    layer: 'roads',
+    subtype: 'primary',
+    width_m: 60,
+    bridge: false,
+    layerOrder: 0,
+    points: points.map((p) => unprojectENU(p[0], p[1], scale.origin)),
+  });
+
   function manyRoads(count: number): LineFeature[] {
     const out: LineFeature[] = [];
     for (let i = 0; i < count; i++) {
@@ -312,7 +360,7 @@ describe('triangle budget', () => {
       out.push({
         layer: 'roads',
         subtype: 'primary',
-        width_m: 12,
+        width_m: 60,
         bridge: false,
         layerOrder: 0,
         points: [
@@ -324,7 +372,7 @@ describe('triangle budget', () => {
     return out;
   }
 
-  it('stops early and says so rather than letting the engine run out', () => {
+  it('stops before spending a budget it cannot afford', () => {
     const built = buildLineLayer('roads', manyRoads(40), [], {
       heightfield: hf,
       scale,
@@ -332,13 +380,49 @@ describe('triangle budget', () => {
       nozzleDiameter_mm: 0.4,
       baseThickness_mm: 3,
       layers,
-      triangleBudget: 5000,
+      triangleBudget: 40,
     });
 
+    // The cost is estimated from the contour before any triangle is built, so
+    // the budget is respected rather than discovered after the fact.
     expect(built.stats.truncated).toBe(true);
-    expect(built.stats.features).toBeLessThan(40);
-    // Whatever it did build is still a usable, closed solid.
-    expect(validateMesh(built.part!.positions, built.part!.indices).manifold).toBe(true);
+    expect(built.stats.triangles).toBeLessThanOrEqual(40);
+  });
+
+  /**
+   * The measured problem: OSM splits a street into many short ways, and 67.5%
+   * of them were shorter than their own printed width in a sample of Islamabad,
+   * with end caps accounting for 56.4% of all contour. Stamping the network into
+   * one field must make those splits cost nothing.
+   */
+  it('costs the same whether a street is one way or twenty', () => {
+    const options = {
+      heightfield: hf,
+      scale,
+      selection: null,
+      nozzleDiameter_mm: 0.4,
+      baseThickness_mm: 3,
+      layers,
+      triangleBudget: 5_000_000,
+    };
+
+    const whole: LineFeature[] = [mkFeature([[-2400, 0], [2400, 0]])];
+
+    // The same street, as OSM actually stores it: twenty abutting ways.
+    const split: LineFeature[] = [];
+    for (let i = 0; i < 20; i++) {
+      const x0 = -2400 + i * 240;
+      split.push(mkFeature([[x0, 0], [x0 + 240, 0]]));
+    }
+
+    const asOne = buildLineLayer('roads', whole, [], options);
+    const asMany = buildLineLayer('roads', split, [], options);
+
+    expect(asOne.part).not.toBeNull();
+    expect(asMany.part).not.toBeNull();
+    // Within a few percent, not twenty times over.
+    expect(asMany.stats.triangles).toBeLessThan(asOne.stats.triangles * 1.3);
+    expect(validateMesh(asMany.part!.positions, asMany.part!.indices).manifold).toBe(true);
   });
 
   it('builds everything when the budget is ample', () => {
@@ -353,5 +437,63 @@ describe('triangle budget', () => {
     });
     expect(built.stats.truncated).toBe(false);
     expect(built.stats.features).toBe(4);
+  });
+});
+
+/**
+ * docs/08-pitfalls.md#bowtie-vertices-from-touching-contours — a road network
+ * clipped to a circle produced a contour that touched itself at one point,
+ * making the surface a bowtie there and the vertical wall edge four-faced.
+ */
+describe('touching contours', () => {
+  function circleRing(r: number, n = 192): Ring {
+    const ring: Ring = [];
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      ring.push([Math.cos(a) * r, Math.sin(a) * r]);
+    }
+    return ring;
+  }
+
+  function streetGrid(): Pt[][] {
+    const lines: Pt[][] = [];
+    for (let i = 0; i < 10; i++) {
+      const c = -2000 + i * 440;
+      lines.push([[-2200, c], [2200, c]], [[c, -2200], [c, 2200]]);
+    }
+    return lines;
+  }
+
+  const extrude = (lines: Pt[][], selection: Ring | null) => {
+    const field = buildRibbonField(lines, 60, selection, 3);
+    return extrudeDraped(
+      field.polygons,
+      () => 5,
+      (x, y) => [x * 0.01, y * 0.01],
+      { height_mm: 1, penetration_mm: 1, minBottom_mm: 0.2, maxEdge_m: Infinity },
+    );
+  };
+
+  it('stays manifold where a clipped network pinches against the boundary', () => {
+    for (const radius of [1800, 1200, 700]) {
+      const mesh = extrude(streetGrid(), circleRing(radius));
+      expect(mesh.triangles).toBeGreaterThan(0);
+      const v = validateMesh(mesh.positions, mesh.indices);
+      expect(v.nonManifoldEdges).toBe(0);
+      expect(v.openEdges).toBe(0);
+      expect(v.manifold).toBe(true);
+    }
+  });
+
+  it('leaves an unclipped network alone', () => {
+    const mesh = extrude(streetGrid(), null);
+    expect(validateMesh(mesh.positions, mesh.indices).manifold).toBe(true);
+  });
+
+  /** A city block is a hole; 81 of them must survive the merge. */
+  it('keeps the blocks between streets as holes', () => {
+    const field = buildRibbonField(streetGrid(), 60, null, 3);
+    expect(field.polygons).toHaveLength(1);
+    expect(field.polygons[0].length).toBeGreaterThan(50);
   });
 });

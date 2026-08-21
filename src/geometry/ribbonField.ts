@@ -63,18 +63,8 @@ interface Field {
  * Cells further than the band are left at Infinity, which reads as "outside"
  * everywhere it matters and costs nothing.
  */
-function pointInRing(x: number, y: number, ring: Ring): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i];
-    const [xj, yj] = ring[j];
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}
-
 function distanceField(
-  centreline: Pt[],
+  centrelines: Pt[][],
   halfWidth_m: number,
   cell_m: number,
   selection: Ring | null,
@@ -83,11 +73,13 @@ function distanceField(
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const [x, y] of centreline) {
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
+  for (const line of centrelines) {
+    for (const [x, y] of line) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
   }
 
   // Two cells of padding so every contour closes inside the grid.
@@ -100,9 +92,10 @@ function distanceField(
   const data = new Float32Array(nx * ny).fill(Infinity);
   const band = halfWidth_m + cell_m * 2;
 
-  for (let s = 1; s < centreline.length; s++) {
-    const a = centreline[s - 1];
-    const b = centreline[s];
+  for (const line of centrelines) {
+   for (let s = 1; s < line.length; s++) {
+    const a = line[s - 1];
+    const b = line[s];
 
     const loI = Math.max(0, Math.floor((Math.min(a[0], b[0]) - band - x0) / cell_m));
     const hiI = Math.min(nx - 1, Math.ceil((Math.max(a[0], b[0]) + band - x0) / cell_m));
@@ -118,6 +111,7 @@ function distanceField(
         if (d < data[row + i]) data[row + i] = d;
       }
     }
+   }
   }
 
   // Clip to the selection by pushing everything outside it out of the level set.
@@ -127,12 +121,40 @@ function distanceField(
   // (docs/08-pitfalls.md#geometry-outside-boundary). The cut edge is stepped at
   // cell resolution — a sixth of the half-width, well under a nozzle.
   if (selection) {
+    // By scanline, not per cell. Testing every cell against every ring segment
+    // is cells x segments; intersecting one horizontal line per row is
+    // rows x segments, which is the difference between usable and not on a
+    // large selection.
+    const crossings: number[] = [];
     for (let j = 0; j < ny; j++) {
       const y = y0 + j * cell_m;
       const row = j * nx;
-      for (let i = 0; i < nx; i++) {
-        if (!pointInRing(x0 + i * cell_m, y, selection)) data[row + i] = Infinity;
+      crossings.length = 0;
+
+      for (let k = 0, n = selection.length; k < n; k++) {
+        const ax = selection[k][0];
+        const ay = selection[k][1];
+        const bx = selection[(k + 1) % n][0];
+        const by = selection[(k + 1) % n][1];
+        if (ay > y === by > y) continue;
+        crossings.push(ax + ((y - ay) / (by - ay)) * (bx - ax));
       }
+
+      if (crossings.length < 2) {
+        data.fill(Infinity, row, row + nx);
+        continue;
+      }
+      crossings.sort((p, q) => p - q);
+
+      // Everything outside the inside-spans is out of the level set.
+      let cursor = 0;
+      for (let c = 0; c + 1 < crossings.length; c += 2) {
+        const from = Math.max(0, Math.ceil((crossings[c] - x0) / cell_m));
+        const to = Math.min(nx - 1, Math.floor((crossings[c + 1] - x0) / cell_m));
+        if (from > cursor) data.fill(Infinity, row + cursor, row + Math.min(from, nx));
+        cursor = Math.max(cursor, to + 1);
+      }
+      if (cursor < nx) data.fill(Infinity, row + cursor, row + nx);
     }
   }
 
@@ -395,8 +417,18 @@ export interface RibbonFieldResult {
  * `width_m` is the full band width in world metres; the caller converts from
  * the style's print millimetres.
  */
+/**
+ * Build the ribbon footprint for one centreline, or for a whole network of them.
+ *
+ * Passing the entire network at once is what makes a city affordable. Every way
+ * stamped into ONE field merges for free — no end caps where OSM happened to
+ * split a street, no duplicated contour where ways abut. In a 3 km sample of
+ * Islamabad, 67.5% of road ways were shorter than their own printed width and
+ * end caps accounted for 56.4% of all contour length. One field per network
+ * removes all of it. See docs/08-pitfalls.md#per-way-ribbon-explosion.
+ */
 export function buildRibbonField(
-  centreline: Pt[],
+  centrelines: Pt[] | Pt[][],
   width_m: number,
   selection: Ring | null = null,
   cellsPerHalfWidth: number = CELLS_PER_HALF_WIDTH,
@@ -405,7 +437,14 @@ export function buildRibbonField(
     polygons: [],
     stats: { cell_m: 0, gridCells: 0, rings: 0, coarsened: false },
   };
-  if (centreline.length < 2 || width_m <= 0) return empty;
+
+  const lines: Pt[][] =
+    centrelines.length > 0 && typeof (centrelines[0] as Pt)[0] === 'number'
+      ? [centrelines as Pt[]]
+      : (centrelines as Pt[][]);
+
+  const usable = lines.filter((line) => line.length >= 2);
+  if (usable.length === 0 || width_m <= 0) return empty;
 
   const halfWidth = width_m / 2;
   let cell = halfWidth / Math.max(1, cellsPerHalfWidth);
@@ -417,11 +456,13 @@ export function buildRibbonField(
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    for (const [x, y] of centreline) {
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
+    for (const line of usable) {
+      for (const [x, y] of line) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
     }
     const pad = halfWidth + cell * 3;
     const cells =
@@ -431,7 +472,7 @@ export function buildRibbonField(
     coarsened = true;
   }
 
-  const field = distanceField(centreline, halfWidth, cell, selection);
+  const field = distanceField(usable, halfWidth, cell, selection);
   const segments = marchingSquares(field, halfWidth);
   const minArea = MIN_RING_AREA_CELLS * cell * cell;
   const rings = chainRings(segments, cell)
