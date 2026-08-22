@@ -77,9 +77,10 @@ export function LayersPanel({
           </p>
         ) : preview ? (
           <p className="field__hint">
-            {preview.included.toLocaleString()} of {preview.drawn.toLocaleString()} lines will be
-            built. Dashed lines are in your Include list but will be cut at this size — they are
-            not in the model.
+            {preview.included === preview.drawn
+              ? `All ${preview.drawn.toLocaleString()} lines will be built.`
+              : `${preview.included.toLocaleString()} of ${preview.drawn.toLocaleString()} lines ` +
+                `will be built. Dashed lines are being dropped.`}
           </p>
         ) : (
           <p className="field__hint">
@@ -97,13 +98,15 @@ export function LayersPanel({
           const built = summaries.find((x) => x.layer === definition.id);
           // Prefer the live preview: it reflects the settings as they stand,
           // where the build summary reflects whatever was last generated.
-          const previewDropped = preview?.droppedByLayer[definition.id];
-          const dropped = previewDropped ?? built?.dropped ?? [];
+          const live = preview?.coverageByLayer[definition.id] !== undefined;
+          const dropped = (live ? preview?.droppedByLayer[definition.id] : built?.dropped) ?? [];
+          const crowded = (live ? preview?.crowdedByLayer[definition.id] : built?.crowded) ?? [];
           const suggested =
-            (previewDropped ? preview?.suggestedMinWidth_mm[definition.id] : undefined) ??
-            built?.suggestedMinWidth_mm ??
+            (live ? preview?.suggestedMinWidth_mm[definition.id] : built?.suggestedMinWidth_mm) ??
             0;
+          const coverage = (live ? preview?.coverageByLayer[definition.id] : built?.coverage) ?? 0;
           const droppedSet = new Set(dropped);
+          const crowdedSet = new Set(crowded);
 
           return (
             <li key={definition.id} className={`layer${open ? ' layer--open' : ''}`}>
@@ -215,11 +218,12 @@ export function LayersPanel({
                         onChange(definition.id, { legibilityFilter: e.target.checked })
                       }
                     />
-                    Only classes the model can carry
+                    Drop classes that will not fit
                   </label>
                   <p className="field__hint">
-                    On by default. Takes classes in importance order until roads would cover a
-                    quarter of the model, which is where a street grid stops reading as a map.
+                    Off by default — everything you tick gets built, and crowded classes are
+                    only flagged. Turn this on to have them removed instead, in importance order,
+                    once they would cover a quarter of the model.
                   </p>
 
                   <fieldset className="subtypes">
@@ -244,19 +248,24 @@ export function LayersPanel({
                     </div>
                     {definition.subtypes.map((subtype) => {
                       const ticked = settings.subtypes.includes(subtype);
-                      // Ticked but absent from the last build: the legibility
-                      // filter cut it. Without this the panel claims the model
-                      // has streets it does not have.
+                      // Ticked but cut from the model: only happens when the
+                      // user asked the filter to enforce. Without this the
+                      // panel claims streets the model does not have.
                       const cut = ticked && droppedSet.has(subtype);
+                      // Built, but it will merge into a solid area at this size.
+                      const dense = ticked && !cut && crowdedSet.has(subtype);
                       return (
                         <label
                           key={subtype}
                           className={`checkbox${cut ? ' checkbox--cut' : ''}`}
                           title={
                             cut
-                              ? 'Will not be built — the model cannot carry this class at ' +
-                                'this size. Lower Min width to fit it in.'
-                              : undefined
+                              ? 'Not built — "Drop classes that will not fit" is on and this ' +
+                                'class is past the budget.'
+                              : dense
+                                ? 'Will be built, but at this size these streets merge into ' +
+                                  'solid areas. Lower Min width to keep them separate.'
+                                : undefined
                           }
                         >
                           <input
@@ -272,14 +281,19 @@ export function LayersPanel({
                           />
                           {subtype}
                           {cut ? <span className="subtypes__cut">not built</span> : null}
+                          {dense ? <span className="subtypes__dense">will merge</span> : null}
                         </label>
                       );
                     })}
                   </fieldset>
 
-                  {dropped.length > 0 && suggested > 0 ? (
+                  {crowded.length > 0 && suggested > 0 ? (
                     <p className="field__hint field__hint--action">
-                      {dropped.length} class(es) will not be built at this size.{' '}
+                      {dropped.length > 0
+                        ? `${dropped.length} class(es) are being left out.`
+                        : `These lines cover ${(coverage * 100).toFixed(0)}% of the model, so ` +
+                          `${crowded.length} class(es) will merge into solid areas. They are ` +
+                          `still built.`}{' '}
                       <button
                         className="btn btn--link"
                         disabled={busy}
@@ -287,7 +301,7 @@ export function LayersPanel({
                       >
                         Set Min width to {suggested.toFixed(2)} mm
                       </button>{' '}
-                      to keep them all — the same streets, drawn thinner.
+                      to keep them separate — the same streets, drawn thinner.
                     </p>
                   ) : null}
                 </div>

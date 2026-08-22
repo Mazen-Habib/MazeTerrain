@@ -318,6 +318,8 @@ export async function assemble(
         layerSummaries.push({
           layer,
           dropped: built.stats.droppedSubtypes,
+          crowded: built.stats.crowdedSubtypes,
+          coverage: built.stats.coverage,
           narrowestWidth_mm: built.stats.narrowestWidth_mm,
           widestWidth_mm: built.stats.width_mm,
           suggestedMinWidth_mm: built.stats.suggestedMinWidth_mm,
@@ -337,14 +339,26 @@ export async function assemble(
         if (built.stats.droppedSubtypes.length > 0) {
           warnings.push({
             level: 'warn',
-            code: 'classes-below-nozzle',
+            code: 'classes-dropped',
             message:
-              `${built.stats.droppedSubtypes.join(', ')} were left out — at this size ` +
-              `they would fill the model rather than read as streets. ` +
-              `To keep them, set ${LAYER_BY_ID[layer].label} → Min width to about ` +
-              `${built.stats.suggestedMinWidth_mm.toFixed(2)} mm, which draws the same ` +
-              `streets thinner instead of dropping any. Or untick the classes you do ` +
-              `not want under "Include", so the rest fit.`,
+              `${built.stats.droppedSubtypes.join(', ')} were left out, because ` +
+              `"Only classes the model can carry" is on for ` +
+              `${LAYER_BY_ID[layer].label.toLowerCase()}. Turn it off to build them ` +
+              `anyway, or set Min width to about ` +
+              `${built.stats.suggestedMinWidth_mm.toFixed(2)} mm to fit them all.`,
+          });
+        } else if (built.stats.crowdedSubtypes.length > 0) {
+          // Built, not blocked. Say what it will look like and how to change it.
+          warnings.push({
+            level: 'warn',
+            code: 'classes-crowded',
+            message:
+              `${built.stats.crowdedSubtypes.join(', ')} were built, but at this size they ` +
+              `cover ${(built.stats.coverage * 100).toFixed(0)}% of the model and will merge ` +
+              `into solid areas rather than read as separate streets. ` +
+              `Set ${LAYER_BY_ID[layer].label} → Min width to about ` +
+              `${built.stats.suggestedMinWidth_mm.toFixed(2)} mm to keep them distinct, ` +
+              `or untick the classes you do not need.`,
           });
         }
 

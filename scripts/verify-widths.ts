@@ -41,7 +41,7 @@ const hf = makeHeightfield(113, 113, (i, j) => 500 + 2 * i + 1.5 * j);
 const scale = scaleFor(hf);
 const layers = defaultLayers();
 
-for (const nozzle of [0.4, 0.2]) {
+for (const nozzle of [0.2]) {
   for (const floor of ['auto', 0.1] as const) {
     const t0 = Date.now();
     const built = buildLineLayer('roads', features, [], {
@@ -62,6 +62,7 @@ for (const nozzle of [0.4, 0.2]) {
       `(${(s.narrowestWidth_mm / scale.scale).toFixed(0)}-${(s.width_mm / scale.scale).toFixed(0)} m real) | ` +
       `tris ${s.triangles.toLocaleString()} | ${(Date.now() - t0) / 1000}s`,
     );
-    console.log(`   dropped: ${s.droppedSubtypes.join(', ') || '(none)'} | ${v}`);
+    console.log(`   coverage ${(s.coverage * 100).toFixed(0)}%  dropped: ${s.droppedSubtypes.join(', ') || '(none)'}`);
+    console.log(`   crowded: ${s.crowdedSubtypes.join(', ') || '(none)'} -> suggest ${s.suggestedMinWidth_mm.toFixed(2)}mm | ${v}`);
   }
 }

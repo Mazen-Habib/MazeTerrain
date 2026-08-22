@@ -56,6 +56,10 @@ export interface LayerBuildSummary {
   layer: string;
   /** Classes the filter left out at this size, in importance order. */
   dropped: string[];
+  /** Classes that were built but will merge into solid areas at this size. */
+  crowded: string[];
+  /** Share of the model footprint this layer covers, 0-1. */
+  coverage: number;
   /** Printed width range actually used, millimetres. */
   narrowestWidth_mm: number;
   widestWidth_mm: number;

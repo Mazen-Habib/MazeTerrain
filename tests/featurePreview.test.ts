@@ -45,28 +45,43 @@ describe('buildFeaturePreview', () => {
     expect(width('track')).toBeCloseTo(0.4, 5); // the floor, one 0.4 mm nozzle
   });
 
-  /**
-   * The point of the preview: a class present in the data but cut by the
-   * legibility filter is still drawn, flagged, so it is visible that the model
-   * will not contain it.
-   */
-  it('draws classes that will be cut, marked as not included', () => {
-    // Enough residential to blow the coverage budget several times over.
-    const features = [...many('motorway', 20, 2), ...many('residential', 6, 400)];
-    const { geojson, summary } = buildFeaturePreview(features, testConfig());
+  /** Enough residential to blow the coverage budget several times over. */
+  const blanketing = () => [...many('motorway', 20, 2), ...many('residential', 6, 400)];
 
-    expect(summary.droppedByLayer.roads).toContain('residential');
+  /**
+   * The default: crowded classes are flagged, not removed. The map shows them
+   * as they will be built, so the crowding is visible before generating rather
+   * than after.
+   */
+  it('flags crowded classes but still marks them as included', () => {
+    const { geojson, summary } = buildFeaturePreview(blanketing(), testConfig());
+
+    expect(summary.crowdedByLayer.roads).toContain('residential');
+    expect(summary.coverageByLayer.roads).toBeGreaterThan(0.25);
     expect(summary.suggestedMinWidth_mm.roads).toBeGreaterThan(0);
 
+    expect(summary.droppedByLayer.roads).toBeUndefined();
+    expect(summary.drawn).toBe(402);
+    expect(summary.included).toBe(402);
+
     const residential = geojson.features.filter((f) => f.properties.subtype === 'residential');
-    expect(residential.length).toBe(400);
-    expect(residential.every((f) => f.properties.included === false)).toBe(true);
+    expect(residential.every((f) => f.properties.included && f.properties.crowded)).toBe(true);
 
     const motorway = geojson.features.filter((f) => f.properties.subtype === 'motorway');
-    expect(motorway.every((f) => f.properties.included === true)).toBe(true);
+    expect(motorway.every((f) => f.properties.crowded === false)).toBe(true);
+  });
 
-    expect(summary.drawn).toBe(402);
+  it('marks classes as not included once the filter is set to enforce', () => {
+    const config = testConfig();
+    config.layers.roads = { ...config.layers.roads, legibilityFilter: true };
+    const { geojson, summary } = buildFeaturePreview(blanketing(), config);
+
+    expect(summary.droppedByLayer.roads).toContain('residential');
     expect(summary.included).toBe(2);
+    expect(summary.drawn).toBe(402);
+
+    const residential = geojson.features.filter((f) => f.properties.subtype === 'residential');
+    expect(residential.every((f) => f.properties.included === false)).toBe(true);
   });
 
   it('omits classes the user unticked entirely, rather than drawing them faded', () => {
@@ -87,9 +102,9 @@ describe('buildFeaturePreview', () => {
   });
 
   /** Lowering the floor is the lever the warning suggests — it must actually work. */
-  it('keeps every class once the floor drops to the suggested width', () => {
+  it('stops crowding once the floor drops to the suggested width', () => {
     const config = testConfig();
-    const features = [...many('motorway', 20, 2), ...many('residential', 6, 400)];
+    const features = blanketing();
 
     const first = buildFeaturePreview(features, config);
     const suggested = first.summary.suggestedMinWidth_mm.roads;
@@ -98,7 +113,8 @@ describe('buildFeaturePreview', () => {
     config.layers.roads = { ...config.layers.roads, minWidth_mm: suggested };
     const second = buildFeaturePreview(features, config);
 
-    expect(second.summary.droppedByLayer.roads).toBeUndefined();
+    expect(second.summary.crowdedByLayer.roads).toBeUndefined();
+    expect(second.summary.coverageByLayer.roads).toBeLessThanOrEqual(0.25);
     expect(second.summary.included).toBe(402);
   });
 });

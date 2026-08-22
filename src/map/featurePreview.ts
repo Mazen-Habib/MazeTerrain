@@ -9,8 +9,11 @@
  * and ships no `subclass` for them, so a tile-driven highlight would show a
  * different set of streets from the one being printed.
  *
- * Classes the legibility filter will cut are still drawn, faded — seeing that a
- * class is present in the data but will not be built is the whole point.
+ * Crowded classes — the ones that will merge into solid areas at this size —
+ * are drawn in full, because by default they are built. They are flagged so the
+ * crowding is visible before generating rather than after. Only when the user
+ * has explicitly asked the filter to enforce does anything appear faded, and
+ * then it means "present in the data, not in the model".
  */
 import type { LineFeature } from '../data/osm/normalise';
 import { LAYERS, LAYER_BY_ID, type LayerId } from '../data/osm/tags';
@@ -24,16 +27,22 @@ export interface PreviewFeatureProperties {
   color: string;
   /** Printed width in millimetres, so the map can show the real hierarchy. */
   width_mm: number;
-  /** False when the legibility filter will cut this class. */
+  /** False when the legibility filter will cut this class from the model. */
   included: boolean;
+  /** True when the class builds but will merge into solid areas at this size. */
+  crowded: boolean;
 }
 
 export interface PreviewSummary {
   /** Lines drawn per layer, and how many of them will actually be built. */
   drawn: number;
   included: number;
-  /** Subtypes present in the data but cut, per layer. */
+  /** Subtypes present in the data but cut from the model, per layer. */
   droppedByLayer: Record<string, string[]>;
+  /** Subtypes that will build but merge into solid areas, per layer. */
+  crowdedByLayer: Record<string, string[]>;
+  /** Share of the model footprint each layer covers, 0-1. */
+  coverageByLayer: Record<string, number>;
   suggestedMinWidth_mm: Record<string, number>;
 }
 
@@ -44,7 +53,14 @@ export interface FeaturePreview {
 
 const EMPTY: FeaturePreview = {
   geojson: { type: 'FeatureCollection', features: [] },
-  summary: { drawn: 0, included: 0, droppedByLayer: {}, suggestedMinWidth_mm: {} },
+  summary: {
+    drawn: 0,
+    included: 0,
+    droppedByLayer: {},
+    crowdedByLayer: {},
+    coverageByLayer: {},
+    suggestedMinWidth_mm: {},
+  },
 };
 
 /** Line layers that are switched on, in the order they are drawn. */
@@ -74,6 +90,8 @@ export function buildFeaturePreview(
     drawn: 0,
     included: 0,
     droppedByLayer: {},
+    crowdedByLayer: {},
+    coverageByLayer: {},
     suggestedMinWidth_mm: {},
   };
 
@@ -84,10 +102,13 @@ export function buildFeaturePreview(
     if (LAYER_BY_ID[layer].kind !== 'line') continue;
 
     const plan = planLineLayer(layer, group, settings, scale, config.nozzleDiameter_mm);
-    if (plan.dropped.length > 0) {
-      summary.droppedByLayer[layer] = plan.dropped;
+    summary.coverageByLayer[layer] = plan.coverage;
+    if (plan.dropped.length > 0) summary.droppedByLayer[layer] = plan.dropped;
+    if (plan.crowded.length > 0) {
+      summary.crowdedByLayer[layer] = plan.crowded;
       summary.suggestedMinWidth_mm[layer] = plan.suggestedMinWidth_mm;
     }
+    const crowdedSet = new Set(plan.crowded);
 
     for (const feature of group) {
       // Absent from the plan means the subtype is unticked under "Include" —
@@ -105,6 +126,7 @@ export function buildFeaturePreview(
           color: settings.color,
           width_mm: plan.widthBySubtype.get(feature.subtype) ?? plan.minWidth_mm,
           included,
+          crowded: crowdedSet.has(feature.subtype),
         },
       });
       summary.drawn++;

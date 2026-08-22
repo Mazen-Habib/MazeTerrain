@@ -737,6 +737,17 @@ body {
   opacity: 0.6;
 }
 
+.subtypes__dense {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border: 1px solid currentColor;
+}
+
 .subtypes__cut {
   margin-left: 6px;
   padding: 0 5px;

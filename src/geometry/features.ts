@@ -45,14 +45,14 @@ export interface LayerSettings {
   minWidth_mm: number | 'auto';
   subtypes: string[];
   /**
-   * Keep only as many classes as the model can legibly carry.
+   * Remove classes the model cannot legibly carry, rather than warning about
+   * them. Off by default.
    *
-   * Below a nozzle width nothing prints at true scale, so every road on a large
-   * model is exaggerated — the question is how many classes to exaggerate before
-   * the result is a solid mass rather than a map. Measured on Islamabad at
-   * 11.2 km, all ten road classes cover 78% of a 100 mm model. Classes are
-   * taken in importance order until printed coverage reaches its limit, so a
-   * city shows motorways and primaries while a neighbourhood shows every lane.
+   * Crowding is a judgement, not an error: a dense city that merges into solid
+   * blocks is a legitimate thing to print, and refusing to build it is the tool
+   * overruling the user. So by default every ticked class is built and a
+   * warning says which ones will merge and what width would separate them.
+   * Turning this on makes the same budget enforce instead of advise.
    * See docs/08-pitfalls.md#sub-nozzle-classes-become-porridge.
    */
   legibilityFilter: boolean;
@@ -93,6 +93,10 @@ export interface FeatureBuildStats {
   narrowestWidth_mm: number;
   /** Classes left out because the model cannot carry them at this size. */
   droppedSubtypes: string[];
+  /** Classes that will build but merge into solid areas at this size. */
+  crowdedSubtypes: string[];
+  /** Share of the model footprint this layer covers, 0-1. */
+  coverage: number;
   /**
    * Floor at which every requested class would fit, when some were dropped.
    * Zero when nothing was dropped.
@@ -381,15 +385,26 @@ export function waterRings(polygons: PolygonFeature[], scale: ResolvedScale): Ri
 export interface LayerPlan {
   /** Subtypes that will be built. */
   kept: Set<string>;
-  /** Subtypes requested but cut, in importance order. */
+  /** Subtypes cut from the build, in importance order. Empty unless the user
+   *  asked for the filter to enforce, rather than warn. */
   dropped: string[];
+  /**
+   * Subtypes past the legibility budget: they will merge into solid areas
+   * rather than read as separate streets.
+   *
+   * Reported whether or not they are dropped. Crowding is the user's call to
+   * make — the model still builds, and a warning says what it will look like.
+   */
+  crowded: string[];
+  /** Share of the model footprint this layer's lines cover, 0-1. */
+  coverage: number;
   /** Printed width per subtype, millimetres. */
   widthBySubtype: Map<string, number>;
   /** Printed width for any real-world width, millimetres. */
   widthFor: (width_m: number) => number;
   /** The floor in force, after resolving 'auto'. */
   minWidth_mm: number;
-  /** Floor at which nothing would be cut; 0 when nothing was. */
+  /** Floor at which nothing would crowd; 0 when nothing does. */
   suggestedMinWidth_mm: number;
   /** Centrelines in local ENU metres, so the builder does not project twice. */
   projected: Map<LineFeature, Pt[]>;
@@ -434,31 +449,33 @@ export function planLineLayer(
   }
 
   const modelArea_mm2 = scale.extentX_m * scale.scale * (scale.extentY_m * scale.scale);
-  const selection = settings.legibilityFilter
-    ? selectLegibleSubtypes(
-        LAYER_BY_ID[layer].subtypes,
-        lengthBySubtype,
-        (subtype) => widthBySubtype.get(subtype) ?? minWidth_mm,
-        scale.scale,
-        modelArea_mm2,
-      )
-    : {
-        kept: new Set(lengthBySubtype.keys()),
-        dropped: [] as string[],
-        spent_mm2: 0,
-        requested_mm2: 0,
-        budget_mm2: 0,
-      };
+
+  // Always work out which classes are past the budget. Whether that *removes*
+  // them is a separate question, and by default the answer is no: a crowded
+  // model is a legitimate thing to want, so it builds and the warning says the
+  // streets will merge. Only an explicit opt-in makes the filter enforce.
+  const legibility = selectLegibleSubtypes(
+    LAYER_BY_ID[layer].subtypes,
+    lengthBySubtype,
+    (subtype) => widthBySubtype.get(subtype) ?? minWidth_mm,
+    scale.scale,
+    modelArea_mm2,
+  );
+
+  const enforce = settings.legibilityFilter;
+  const crowded = legibility.dropped;
 
   return {
-    kept: selection.kept,
-    dropped: selection.dropped,
+    kept: enforce ? legibility.kept : new Set(lengthBySubtype.keys()),
+    dropped: enforce ? legibility.dropped : [],
+    crowded,
+    coverage: modelArea_mm2 > 0 ? legibility.requested_mm2 / modelArea_mm2 : 0,
     widthBySubtype,
     widthFor,
     minWidth_mm,
     suggestedMinWidth_mm:
-      selection.dropped.length > 0
-        ? minWidthToFit_mm(minWidth_mm, selection.requested_mm2, selection.budget_mm2)
+      crowded.length > 0
+        ? minWidthToFit_mm(minWidth_mm, legibility.requested_mm2, legibility.budget_mm2)
         : 0,
     projected,
   };
@@ -491,6 +508,8 @@ export function buildLineLayer(
     width_mm: 0,
     narrowestWidth_mm: Infinity,
     droppedSubtypes: [],
+    crowdedSubtypes: [],
+    coverage: 0,
     suggestedMinWidth_mm: 0,
   };
 
@@ -515,6 +534,8 @@ export function buildLineLayer(
   const selection = { kept: plan.kept, dropped: plan.dropped };
 
   stats.droppedSubtypes = plan.dropped;
+  stats.crowdedSubtypes = plan.crowded;
+  stats.coverage = plan.coverage;
   stats.suggestedMinWidth_mm = plan.suggestedMinWidth_mm;
 
   for (const feature of features) {

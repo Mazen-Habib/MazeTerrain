@@ -241,9 +241,11 @@ describe('buildLineLayer', () => {
     expect(built.part).not.toBeNull();
   });
 
-  it('drops the lesser classes once roads would blanket the model', () => {
-    // A dense grid of residential streets plus one motorway. The motorway is
-    // the important class and must survive; the grid must not blanket the model.
+  /**
+   * A dense grid of residential streets plus one motorway. Crowding is a
+   * judgement, not an error, so by default it builds and only reports.
+   */
+  function blanketingGrid(): LineFeature[] {
     const dense: LineFeature[] = [
       feature([[-2500, 0], [2500, 0]], { width_m: 200, subtype: 'motorway' }),
     ];
@@ -251,8 +253,30 @@ describe('buildLineLayer', () => {
       const y = -2500 + i * 40;
       dense.push(feature([[-2500, y], [2500, y]], { width_m: 60, subtype: 'residential' }));
     }
+    return dense;
+  }
 
-    const built = buildLineLayer('roads', dense, [], options);
+  it('builds a blanketing grid anyway, and reports the crowding', () => {
+    const built = buildLineLayer('roads', blanketingGrid(), [], options);
+
+    expect(built.stats.crowdedSubtypes).toContain('residential');
+    expect(built.stats.coverage).toBeGreaterThan(0.25);
+    // Reported, not removed: the user asked for these streets.
+    expect(built.stats.droppedSubtypes).toHaveLength(0);
+    expect(built.stats.suggestedMinWidth_mm).toBeGreaterThan(0);
+    expect(built.part).not.toBeNull();
+  });
+
+  it('drops the lesser classes only when explicitly asked to', () => {
+    const enforce: Record<string, LayerSettings> = {
+      ...layers,
+      roads: { ...layers.roads, legibilityFilter: true },
+    };
+    const built = buildLineLayer('roads', blanketingGrid(), [], {
+      ...options,
+      layers: enforce,
+    });
+
     expect(built.stats.droppedSubtypes).toContain('residential');
     expect(built.part).not.toBeNull();
   });
@@ -263,6 +287,8 @@ describe('buildLineLayer', () => {
       ...layers,
       roads: { ...layers.roads, legibilityFilter: false },
     };
+    // legibilityFilter is off by default; spelled out here because this test is
+    // about the width floor, not about class selection.
     const built = buildLineLayer(
       'roads',
       [feature([[-1000, 0], [1000, 0]], { width_m: 2 })],
