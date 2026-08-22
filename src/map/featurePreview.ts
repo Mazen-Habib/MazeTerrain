@@ -44,6 +44,8 @@ export interface PreviewSummary {
   /** Share of the model footprint each layer covers, 0-1. */
   coverageByLayer: Record<string, number>;
   suggestedMinWidth_mm: Record<string, number>;
+  /** Printed width per layer and class, so the panel can show real numbers. */
+  widthByLayer: Record<string, Record<string, number>>;
 }
 
 export interface FeaturePreview {
@@ -60,6 +62,7 @@ const EMPTY: FeaturePreview = {
     crowdedByLayer: {},
     coverageByLayer: {},
     suggestedMinWidth_mm: {},
+    widthByLayer: {},
   },
 };
 
@@ -93,6 +96,7 @@ export function buildFeaturePreview(
     crowdedByLayer: {},
     coverageByLayer: {},
     suggestedMinWidth_mm: {},
+    widthByLayer: {},
   };
 
   for (const layer of enabledLineLayers(config)) {
@@ -103,6 +107,7 @@ export function buildFeaturePreview(
 
     const plan = planLineLayer(layer, group, settings, scale, config.nozzleDiameter_mm);
     summary.coverageByLayer[layer] = plan.coverage;
+    summary.widthByLayer[layer] = Object.fromEntries(plan.widthBySubtype);
     if (plan.dropped.length > 0) summary.droppedByLayer[layer] = plan.dropped;
     if (plan.crowded.length > 0) {
       summary.crowdedByLayer[layer] = plan.crowded;

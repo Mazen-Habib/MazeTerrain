@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildLineLayer,
+  estimatedWidths_mm,
   groupLines,
   ladderWidth_mm,
   mergeSolids,
@@ -592,5 +593,130 @@ describe('selectLegibleSubtypes', () => {
     const lengths = new Map([['motorway', 1e9], ['primary', 1e9]]);
     const { kept } = selectLegibleSubtypes(ordered, lengths, () => 0.5, 0.01, 10_000);
     expect([...kept]).toEqual(['motorway']);
+  });
+});
+
+/**
+ * Per-class width overrides.
+ *
+ * The ladder gives sane defaults that follow the model's scale, but tuning a
+ * print means setting a class directly — and what you set has to be what gets
+ * built, not a starting point the floor or the layer multiplier then moves.
+ */
+describe('per-class width overrides', () => {
+  const layers = defaultLayers();
+  const options = {
+    heightfield: hf,
+    scale,
+    selection: null,
+    nozzleDiameter_mm: 0.4,
+    baseThickness_mm: 3,
+    layers,
+    triangleBudget: 5_000_000,
+  };
+
+  function road(subtype: string, width_m: number): LineFeature {
+    return {
+      layer: 'roads',
+      subtype,
+      width_m,
+      bridge: false,
+      layerOrder: 0,
+      points: [
+        [-2000, 0],
+        [2000, 0],
+      ].map((p) => unprojectENU(p[0], p[1], scale.origin)),
+    };
+  }
+
+  function widthsFor(overrides: Record<string, number>, extra: Partial<LayerSettings> = {}) {
+    const built = buildLineLayer('roads', [road('motorway', 20), road('track', 3)], [], {
+      ...options,
+      layers: {
+        ...layers,
+        roads: { ...layers.roads, subtypeWidth_mm: overrides, ...extra },
+      },
+    });
+    return built.stats;
+  }
+
+  it('uses the ladder when nothing is overridden', () => {
+    const plain = widthsFor({});
+    expect(plain.width_mm).toBeGreaterThan(plain.narrowestWidth_mm);
+  });
+
+  it('takes an override as the final printed width', () => {
+    const stats = widthsFor({ motorway: 1.75 });
+    expect(stats.width_mm).toBeCloseTo(1.75, 5);
+  });
+
+  it('does not let widthScale move a hand-set class', () => {
+    const scaled = widthsFor({ motorway: 1.75 }, { widthScale: 3 });
+    expect(scaled.width_mm).toBeCloseTo(1.75, 5);
+  });
+
+  it('does not let the floor raise a hand-set class', () => {
+    // 0.05 mm is well under the 0.4 mm floor for this nozzle.
+    const stats = widthsFor({ motorway: 0.05, track: 0.05 });
+    expect(stats.narrowestWidth_mm).toBeCloseTo(0.05, 5);
+    expect(stats.width_mm).toBeCloseTo(0.05, 5);
+  });
+
+  it('leaves other classes on the ladder', () => {
+    const stats = widthsFor({ motorway: 2 });
+    // track is untouched, so it still sits on the floor.
+    expect(stats.narrowestWidth_mm).toBeCloseTo(0.4, 5);
+    expect(stats.width_mm).toBeCloseTo(2, 5);
+  });
+
+  it('feeds overrides into the crowding budget', () => {
+    const dense: LineFeature[] = [];
+    for (let i = 0; i < 60; i++) {
+      const y = -2500 + i * 80;
+      dense.push({
+        layer: 'roads',
+        subtype: 'residential',
+        width_m: 60,
+        bridge: false,
+        layerOrder: 0,
+        points: [
+          [-2500, y],
+          [2500, y],
+        ].map((p) => unprojectENU(p[0], p[1], scale.origin)),
+      });
+    }
+
+    const wide = buildLineLayer('roads', dense, [], {
+      ...options,
+      layers: { ...layers, roads: { ...layers.roads, subtypeWidth_mm: { residential: 3 } } },
+    });
+    const narrow = buildLineLayer('roads', dense, [], {
+      ...options,
+      layers: { ...layers, roads: { ...layers.roads, subtypeWidth_mm: { residential: 0.1 } } },
+    });
+
+    expect(wide.stats.coverage).toBeGreaterThan(narrow.stats.coverage);
+    expect(wide.stats.crowdedSubtypes).toContain('residential');
+    expect(narrow.stats.crowdedSubtypes).toHaveLength(0);
+  });
+});
+
+describe('estimatedWidths_mm', () => {
+  const natural: Record<string, number> = { motorway: 20, residential: 6, track: 3 };
+  const settings = { widthScale: 1, subtypeWidth_mm: {} };
+  const at = (s: typeof settings) =>
+    estimatedWidths_mm(['motorway', 'residential', 'track'], (k) => natural[k], s, 0.4, 100 / 11200);
+
+  it('matches the ladder, so the panel shows what will be built', () => {
+    const w = at(settings);
+    expect(w.get('track')).toBeCloseTo(0.4, 5); // narrowest class sits on the floor
+    expect(w.get('residential')).toBeGreaterThan(w.get('track')!);
+    expect(w.get('motorway')).toBeGreaterThan(w.get('residential')!);
+  });
+
+  it('reports an override rather than the ladder value', () => {
+    const w = at({ widthScale: 1, subtypeWidth_mm: { residential: 1.2 } });
+    expect(w.get('residential')).toBeCloseTo(1.2, 5);
+    expect(w.get('track')).toBeCloseTo(0.4, 5);
   });
 });

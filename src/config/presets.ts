@@ -102,6 +102,7 @@ export function defaultLayers(): Record<string, LayerSettings> {
       heightScale: 1.0,
       widthScale: 1.0,
       minWidth_mm: 'auto',
+      subtypeWidth_mm: {},
       subtypes: [...layer.subtypes],
       legibilityFilter: false,
     };

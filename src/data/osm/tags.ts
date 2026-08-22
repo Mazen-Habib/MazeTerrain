@@ -202,6 +202,34 @@ function truthy(value: string | undefined): boolean {
  * printed tunnel is a road embedded inside a mountain, which reads as an
  * artefact rather than a road (docs/04-data-sources.md).
  */
+/**
+ * The real-world width `classify` assigns to a class, without needing a feature.
+ *
+ * The Layers panel needs each class's width to show what it will print at
+ * before any OSM data has been fetched. Kept next to `classify` so the two
+ * cannot drift: every branch below mirrors one there.
+ */
+export function defaultWidth_m(layer: LayerId, subtype: string): number {
+  switch (layer) {
+    case 'roads':
+      return ROAD_WIDTH_M[subtype] ?? 6;
+    case 'trails':
+      return ROAD_WIDTH_M[subtype] ?? 2;
+    case 'railways':
+      return RAIL_WIDTH_M;
+    case 'aeroways':
+      return AEROWAY_WIDTH_M[subtype] ?? 20;
+    case 'piers':
+      return PIER_WIDTH_M;
+    case 'skiruns':
+      return SKI_WIDTH_M;
+    case 'water':
+      return subtype === 'river' ? 20 : subtype === 'canal' ? 12 : 5;
+    default:
+      return 6;
+  }
+}
+
 export function classify(tags: Tags): Classification | null {
   if (truthy(tags['tunnel'])) return null;
   if (tags['location'] === 'underground') return null;

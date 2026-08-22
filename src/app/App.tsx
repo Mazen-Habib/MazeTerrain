@@ -30,6 +30,7 @@ import type { LineFeature } from '../data/osm/normalise';
 import { normalise } from '../data/osm/normalise';
 import { fetchOsm, OverpassError } from '../data/osm/overpass';
 import { buildFeaturePreview, enabledLineLayers } from '../map/featurePreview';
+import { resolveScale } from '../geometry/coords';
 import { BASEMAPS } from '../map/basemaps';
 import type { DrawTool, LonLat } from '../map/draw';
 import { MapView } from '../map/MapView';
@@ -300,6 +301,10 @@ export function App() {
 
   // The preview belongs to the selection it was fetched for. Moving the
   // selection must clear it rather than leave roads highlighted somewhere else.
+  // Print millimetres per real-world metre, so the layer panel can show class
+  // widths in both units. Elevation only drives exaggeration, not this.
+  const previewScale_mm_per_m = useMemo(() => resolveScale(config, 0, 0).scale, [config]);
+
   const selectionKey = JSON.stringify(config.bbox);
   const previewStale = previewLines !== null && previewBBox !== selectionKey;
 
@@ -385,6 +390,7 @@ export function App() {
             layers={config.layers}
             busy={busy}
             nozzleDiameter_mm={config.nozzleDiameter_mm}
+            scale_mm_per_m={previewScale_mm_per_m}
             summaries={bundle?.layers ?? []}
             preview={preview?.summary ?? null}
             previewBusy={previewBusy}

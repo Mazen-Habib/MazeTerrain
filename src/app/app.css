@@ -726,6 +726,57 @@ body {
   margin-bottom: 2px;
 }
 
+/* One class: the tick on its own line, its width control under it. */
+.subtype {
+  margin-bottom: 6px;
+}
+
+.subtype__width {
+  display: grid;
+  grid-template-columns: 1fr 52px 40px 30px;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0 22px;
+}
+
+.subtype__slider {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.subtype__value {
+  min-width: 0;
+  padding: 2px 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--panel-2, #1c1c1c);
+  border: 1px solid var(--line, #333);
+  border-radius: 3px;
+}
+
+.subtype__real {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.subtype__reset {
+  font-size: 10px;
+  text-align: right;
+  text-decoration: none;
+}
+
+.subtype__reset:disabled {
+  color: var(--muted);
+  opacity: 0.4;
+  cursor: default;
+}
+
 .subtypes__bulk {
   display: flex;
   gap: 10px;

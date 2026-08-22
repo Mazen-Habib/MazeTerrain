@@ -5,8 +5,8 @@
  * collapsed row — the pattern Map2Model and TerraPrinter both converged on.
  */
 import { useState } from 'react';
-import { LAYERS, type LayerId } from '../data/osm/tags';
-import type { LayerSettings } from '../geometry/features';
+import { LAYERS, defaultWidth_m, type LayerId } from '../data/osm/tags';
+import { estimatedWidths_mm, resolveMinWidth_mm, type LayerSettings } from '../geometry/features';
 import type { LayerBuildSummary } from '../geometry/types';
 import type { PreviewSummary } from '../map/featurePreview';
 import { NumberField } from './NumberField';
@@ -16,6 +16,8 @@ interface LayersPanelProps {
   busy: boolean;
   /** Drives the "auto" min-width hint, so the panel shows the number in force. */
   nozzleDiameter_mm: number;
+  /** Print millimetres per real-world metre, for the class width sliders. */
+  scale_mm_per_m: number;
   /** What the last build actually did, so ticked-but-absent classes are visible. */
   summaries: LayerBuildSummary[];
   /** What the on-map preview currently shows, or null when none is loaded. */
@@ -48,6 +50,7 @@ export function LayersPanel({
   layers,
   busy,
   nozzleDiameter_mm,
+  scale_mm_per_m,
   summaries,
   preview,
   previewBusy,
@@ -107,6 +110,23 @@ export function LayersPanel({
           const coverage = (live ? preview?.coverageByLayer[definition.id] : built?.coverage) ?? 0;
           const droppedSet = new Set(dropped);
           const crowdedSet = new Set(crowded);
+
+          const floor_mm = resolveMinWidth_mm(settings.minWidth_mm, nozzleDiameter_mm);
+          // Real widths once a preview exists; otherwise the same ladder run
+          // over the tag tables, so a slider always has a number to show.
+          const measured = preview?.widthByLayer[definition.id];
+          const estimated = estimatedWidths_mm(
+            settings.subtypes,
+            (subtype) => defaultWidth_m(definition.id, subtype),
+            settings,
+            floor_mm,
+            scale_mm_per_m,
+          );
+          const widthOf = (subtype: string) =>
+            settings.subtypeWidth_mm[subtype] ??
+            measured?.[subtype] ??
+            estimated.get(subtype) ??
+            floor_mm;
 
           return (
             <li key={definition.id} className={`layer${open ? ' layer--open' : ''}`}>
@@ -169,7 +189,7 @@ export function LayersPanel({
                     step={0.1}
                     disabled={busy}
                     onChange={(v) => onChange(definition.id, { widthScale: v })}
-                    hint="Real-world widths come from the road class, not the sparse width tag."
+                    hint="Scales every class still on automatic. A class with a hand-set width below keeps that width."
                   />
 
                   <div className="field">
@@ -227,7 +247,9 @@ export function LayersPanel({
                   </p>
 
                   <fieldset className="subtypes">
-                    <legend className="field__label">Include</legend>
+                    <legend className="field__label">
+                      Include<span className="field__unit">width, mm</span>
+                    </legend>
                     <div className="subtypes__bulk">
                       <button
                         className="btn btn--link"
@@ -245,6 +267,13 @@ export function LayersPanel({
                       >
                         None
                       </button>
+                      <button
+                        className="btn btn--link"
+                        disabled={busy || Object.keys(settings.subtypeWidth_mm).length === 0}
+                        onClick={() => onChange(definition.id, { subtypeWidth_mm: {} })}
+                      >
+                        Reset widths
+                      </button>
                     </div>
                     {definition.subtypes.map((subtype) => {
                       const ticked = settings.subtypes.includes(subtype);
@@ -254,35 +283,92 @@ export function LayersPanel({
                       const cut = ticked && droppedSet.has(subtype);
                       // Built, but it will merge into a solid area at this size.
                       const dense = ticked && !cut && crowdedSet.has(subtype);
+                      const width_mm = widthOf(subtype);
+                      const overridden = settings.subtypeWidth_mm[subtype] !== undefined;
+                      const real_m = scale_mm_per_m > 0 ? width_mm / scale_mm_per_m : 0;
+
+                      const setWidth = (value: number | null) => {
+                        const next = { ...settings.subtypeWidth_mm };
+                        if (value === null) delete next[subtype];
+                        else next[subtype] = value;
+                        onChange(definition.id, { subtypeWidth_mm: next });
+                      };
+
                       return (
-                        <label
-                          key={subtype}
-                          className={`checkbox${cut ? ' checkbox--cut' : ''}`}
-                          title={
-                            cut
-                              ? 'Not built — "Drop classes that will not fit" is on and this ' +
-                                'class is past the budget.'
-                              : dense
-                                ? 'Will be built, but at this size these streets merge into ' +
-                                  'solid areas. Lower Min width to keep them separate.'
-                                : undefined
-                          }
-                        >
-                          <input
-                            type="checkbox"
-                            checked={ticked}
-                            disabled={busy}
-                            onChange={(e) => {
-                              const next = e.target.checked
-                                ? [...settings.subtypes, subtype]
-                                : settings.subtypes.filter((s) => s !== subtype);
-                              onChange(definition.id, { subtypes: next });
-                            }}
-                          />
-                          {subtype}
-                          {cut ? <span className="subtypes__cut">not built</span> : null}
-                          {dense ? <span className="subtypes__dense">will merge</span> : null}
-                        </label>
+                        <div key={subtype} className="subtype">
+                          <label
+                            className={`checkbox${cut ? ' checkbox--cut' : ''}`}
+                            title={
+                              cut
+                                ? 'Not built — "Drop classes that will not fit" is on and this ' +
+                                  'class is past the budget.'
+                                : dense
+                                  ? 'Will be built, but at this size these streets merge into ' +
+                                    'solid areas. Make them narrower to keep them separate.'
+                                  : undefined
+                            }
+                          >
+                            <input
+                              type="checkbox"
+                              checked={ticked}
+                              disabled={busy}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? [...settings.subtypes, subtype]
+                                  : settings.subtypes.filter((s) => s !== subtype);
+                                onChange(definition.id, { subtypes: next });
+                              }}
+                            />
+                            {subtype}
+                            {cut ? <span className="subtypes__cut">not built</span> : null}
+                            {dense ? <span className="subtypes__dense">will merge</span> : null}
+                          </label>
+
+                          {ticked ? (
+                            <div className="subtype__width">
+                              <input
+                                type="range"
+                                className="subtype__slider"
+                                aria-label={`${subtype} width`}
+                                min={0.05}
+                                max={3}
+                                step={0.01}
+                                value={width_mm}
+                                disabled={busy}
+                                onChange={(e) => setWidth(Number(e.target.value))}
+                              />
+                              <input
+                                type="number"
+                                className="subtype__value"
+                                aria-label={`${subtype} width in millimetres`}
+                                min={0.01}
+                                max={20}
+                                step={0.01}
+                                value={Number(width_mm.toFixed(2))}
+                                disabled={busy}
+                                onChange={(e) => {
+                                  const v = Number(e.target.value);
+                                  if (Number.isFinite(v) && v > 0) setWidth(v);
+                                }}
+                              />
+                              <span className="subtype__real" title="Real-world width at this scale">
+                                {real_m >= 1 ? `${real_m.toFixed(0)} m` : `${real_m.toFixed(1)} m`}
+                              </span>
+                              <button
+                                className="btn btn--link subtype__reset"
+                                disabled={busy || !overridden}
+                                title={
+                                  overridden
+                                    ? 'Back to the automatic width for this class'
+                                    : 'Already automatic'
+                                }
+                                onClick={() => setWidth(null)}
+                              >
+                                {overridden ? 'auto' : '·'}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
                       );
                     })}
                   </fieldset>

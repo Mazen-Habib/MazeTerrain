@@ -43,6 +43,15 @@ export interface LayerSettings {
    * the nozzle is what turns a city into a slab.
    */
   minWidth_mm: number | 'auto';
+  /**
+   * Printed width per class, in millimetres, overriding the ladder.
+   *
+   * Sparse: a class absent from this map is on the ladder, which is what makes
+   * the defaults follow the model's scale. An entry here is the final printed
+   * width for that class — taking manual control of a class stops `widthScale`
+   * second-guessing it, so what you set is what gets built.
+   */
+  subtypeWidth_mm: Record<string, number>;
   subtypes: string[];
   /**
    * Remove classes the model cannot legibly carry, rather than warning about
@@ -184,6 +193,45 @@ export function minWidthToFit_mm(
   return Math.max(0.01, Math.floor((currentFloor_mm * budget_mm2) / requested_mm2 * 100) / 100);
 }
 
+/**
+ * What each class will print at, worked out from the tag tables alone.
+ *
+ * The Layers panel has to show a width beside every class before any OSM data
+ * exists, so this mirrors `planLineLayer`'s ladder using the class's documented
+ * real-world width instead of measured features. Once a preview is loaded the
+ * panel uses the real numbers, which differ only in the ladder's anchor: this
+ * assumes the narrowest ticked class is present, which is almost always true.
+ */
+export function estimatedWidths_mm(
+  subtypes: string[],
+  naturalWidth_m: (subtype: string) => number,
+  settings: Pick<LayerSettings, 'widthScale' | 'subtypeWidth_mm'>,
+  minWidth_mm: number,
+  scale_mm_per_m: number,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (subtypes.length === 0) return out;
+
+  let narrowest_m = Infinity;
+  for (const subtype of subtypes) {
+    const w = naturalWidth_m(subtype);
+    if (w > 0) narrowest_m = Math.min(narrowest_m, w);
+  }
+
+  const overrides = settings.subtypeWidth_mm ?? {};
+  for (const subtype of subtypes) {
+    const override = overrides[subtype];
+    out.set(
+      subtype,
+      override !== undefined && override > 0
+        ? override
+        : ladderWidth_mm(naturalWidth_m(subtype), narrowest_m, minWidth_mm, scale_mm_per_m) *
+            settings.widthScale,
+    );
+  }
+  return out;
+}
+
 /** Length of a projected line, metres. */
 function lineLength(points: Pt[]): number {
   let total = 0;
@@ -215,6 +263,15 @@ export function selectLegibleSubtypes(
 ): {
   kept: Set<string>;
   dropped: string[];
+  /**
+   * Classes from the point where cumulative coverage crosses the budget.
+   *
+   * Unlike `dropped` this does NOT exempt the most important class. That
+   * exemption exists so an enabled layer never renders as nothing, which is a
+   * rule about what to remove — as a rule about what to *warn* on it silences
+   * the clearest case there is: one class, on its own, blanketing the model.
+   */
+  over: string[];
   /** Printed area the kept classes use. */
   spent_mm2: number;
   /** Printed area every requested class would use, kept or not. */
@@ -223,6 +280,7 @@ export function selectLegibleSubtypes(
 } {
   const kept = new Set<string>();
   const dropped: string[] = [];
+  const over: string[] = [];
   const budget_mm2 = modelArea_mm2 * COVERAGE_LIMIT;
   let requested_mm2 = 0;
   for (const subtype of ordered) {
@@ -237,7 +295,15 @@ export function selectLegibleSubtypes(
     if (length_m === undefined || length_m <= 0) continue;
 
     const area_mm2 = length_m * scale_mm_per_m * printedWidth_mm(subtype);
-    if (kept.size > 0 && spent + area_mm2 > budget_mm2) {
+    const overflows = spent + area_mm2 > budget_mm2;
+
+    if (overflows && over.length === 0) {
+      for (const rest of ordered.slice(i)) {
+        if ((lengthBySubtype.get(rest) ?? 0) > 0) over.push(rest);
+      }
+    }
+
+    if (overflows && kept.size > 0) {
       for (const rest of ordered.slice(i)) {
         if ((lengthBySubtype.get(rest) ?? 0) > 0) dropped.push(rest);
       }
@@ -247,7 +313,7 @@ export function selectLegibleSubtypes(
     spent += area_mm2;
   }
 
-  return { kept, dropped, spent_mm2: spent, requested_mm2, budget_mm2 };
+  return { kept, dropped, over, spent_mm2: spent, requested_mm2, budget_mm2 };
 }
 
 /** A run of consecutive points kept after the water split. */
@@ -398,10 +464,12 @@ export interface LayerPlan {
   crowded: string[];
   /** Share of the model footprint this layer's lines cover, 0-1. */
   coverage: number;
-  /** Printed width per subtype, millimetres. */
+  /** Printed width per subtype, millimetres, overrides applied. */
   widthBySubtype: Map<string, number>;
-  /** Printed width for any real-world width, millimetres. */
-  widthFor: (width_m: number) => number;
+  /** What each subtype would print at on the ladder, ignoring any override. */
+  autoWidthBySubtype: Map<string, number>;
+  /** Printed width for one feature, millimetres. */
+  widthFor: (subtype: string, width_m: number) => number;
   /** The floor in force, after resolving 'auto'. */
   minWidth_mm: number;
   /** Floor at which nothing would crowd; 0 when nothing does. */
@@ -440,12 +508,24 @@ export function planLineLayer(
   // The ladder is anchored on the narrowest class actually present, so a
   // selection holding only motorways prints them at the floor rather than
   // several times it.
-  const widthFor = (width_m: number) =>
+  const autoWidth = (width_m: number) =>
     ladderWidth_mm(width_m, narrowest_m, minWidth_mm, scale.scale) * settings.widthScale;
 
+  const overrides = settings.subtypeWidth_mm ?? {};
+  const widthFor = (subtype: string, width_m: number) => {
+    const override = overrides[subtype];
+    // An override is the final width. The floor does not raise it and
+    // widthScale does not scale it: the user has said what they want, and the
+    // below-nozzle warning covers the case where that is very thin.
+    if (override !== undefined && override > 0) return Math.max(0.01, override);
+    return autoWidth(width_m);
+  };
+
   const widthBySubtype = new Map<string, number>();
+  const autoWidthBySubtype = new Map<string, number>();
   for (const [subtype, natural_m] of naturalBySubtype) {
-    widthBySubtype.set(subtype, widthFor(natural_m));
+    widthBySubtype.set(subtype, widthFor(subtype, natural_m));
+    autoWidthBySubtype.set(subtype, autoWidth(natural_m));
   }
 
   const modelArea_mm2 = scale.extentX_m * scale.scale * (scale.extentY_m * scale.scale);
@@ -463,7 +543,7 @@ export function planLineLayer(
   );
 
   const enforce = settings.legibilityFilter;
-  const crowded = legibility.dropped;
+  const crowded = legibility.over;
 
   return {
     kept: enforce ? legibility.kept : new Set(lengthBySubtype.keys()),
@@ -471,6 +551,7 @@ export function planLineLayer(
     crowded,
     coverage: modelArea_mm2 > 0 ? legibility.requested_mm2 / modelArea_mm2 : 0,
     widthBySubtype,
+    autoWidthBySubtype,
     widthFor,
     minWidth_mm,
     suggestedMinWidth_mm:
@@ -544,7 +625,7 @@ export function buildLineLayer(
     if (!selection.kept.has(feature.subtype)) continue;
 
     const natural_mm = feature.width_m * scale.scale * settings.widthScale;
-    const width_mm = widthFor(feature.width_m);
+    const width_mm = widthFor(feature.subtype, feature.width_m);
     if (width_mm > natural_mm + 1e-6) stats.widthClamped = true;
     stats.width_mm = Math.max(stats.width_mm, width_mm);
     stats.narrowestWidth_mm = Math.min(stats.narrowestWidth_mm, width_mm);
