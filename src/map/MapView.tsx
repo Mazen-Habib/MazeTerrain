@@ -35,6 +35,8 @@ interface MapViewProps {
   shape: SelectionShape | null;
   tool: DrawTool | null;
   routes: Route[];
+  /** OSM features the model will contain, or null when no preview is loaded. */
+  featurePreview: GeoJSON.FeatureCollection | null;
   onShapeChange: (shape: SelectionShape) => void;
   onToolFinished: () => void;
   onCursor: (lonLat: LonLat) => void;
@@ -55,6 +57,7 @@ export function MapView({
   shape,
   tool,
   routes,
+  featurePreview,
   onShapeChange,
   onToolFinished,
   onCursor,
@@ -102,6 +105,7 @@ export function MapView({
     }
 
     for (const [id, data] of [
+      ['features', EMPTY],
       ['routes', EMPTY],
       ['selection', EMPTY],
       ['draft', EMPTY],
@@ -111,6 +115,43 @@ export function MapView({
     }
 
     if (!m.getLayer('selection-fill')) {
+      // Feature preview sits below the selection outline and the routes, so
+      // neither is ever hidden by a dense street network.
+      // Width follows the PRINTED width, not the real one, so the hierarchy on
+      // screen is the hierarchy that gets built.
+      m.addLayer({
+        id: 'features-excluded',
+        type: 'line',
+        source: 'features',
+        filter: ['!', ['get', 'included']],
+        layout: { 'line-cap': 'butt', 'line-join': 'round' },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-opacity': 0.35,
+          'line-dasharray': [1.5, 1.5],
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            9, ['max', 0.5, ['*', ['get', 'width_mm'], 1.2]],
+            16, ['max', 1.5, ['*', ['get', 'width_mm'], 9]],
+          ],
+        },
+      });
+      m.addLayer({
+        id: 'features-line',
+        type: 'line',
+        source: 'features',
+        filter: ['get', 'included'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-opacity': 0.9,
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            9, ['max', 0.6, ['*', ['get', 'width_mm'], 1.5]],
+            16, ['max', 2, ['*', ['get', 'width_mm'], 11]],
+          ],
+        },
+      });
       m.addLayer({
         id: 'selection-fill',
         type: 'fill',
@@ -352,6 +393,11 @@ export function MapView({
       })),
     });
   }, [routes, setData, basemapId]);
+
+  useEffect(() => {
+    if (!ready.current) return;
+    setData('features', featurePreview ?? { type: 'FeatureCollection', features: [] });
+  }, [featurePreview, setData, basemapId]);
 
   useEffect(() => {
     const m = map.current;

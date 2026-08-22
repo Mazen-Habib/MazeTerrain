@@ -91,8 +91,13 @@ export interface FeatureBuildStats {
   width_mm: number;
   /** Narrowest printed line in this layer — the one a nozzle has to manage. */
   narrowestWidth_mm: number;
-  /** Classes left out because they are narrower than the nozzle at this scale. */
+  /** Classes left out because the model cannot carry them at this size. */
   droppedSubtypes: string[];
+  /**
+   * Floor at which every requested class would fit, when some were dropped.
+   * Zero when nothing was dropped.
+   */
+  suggestedMinWidth_mm: number;
 }
 
 /**
@@ -154,6 +159,27 @@ export function ladderWidth_mm(
   return Math.max(natural_mm, lifted);
 }
 
+/**
+ * The floor at which every requested class would fit.
+ *
+ * Dropping classes is the blunt lever. The sharp one is drawing the same roads
+ * thinner, which keeps the whole street pattern and only costs fineness — so
+ * the warning should name a number the user can type rather than telling them
+ * to shrink their area. Coverage is very nearly linear in the floor, because
+ * the ladder multiplies it through: halve the floor and every class halves,
+ * except any already printing at true scale, which is why this is a suggestion
+ * and the build still re-checks.
+ */
+export function minWidthToFit_mm(
+  currentFloor_mm: number,
+  requested_mm2: number,
+  budget_mm2: number,
+): number {
+  if (!(requested_mm2 > budget_mm2) || !(currentFloor_mm > 0)) return currentFloor_mm;
+  // Round down to a typable 0.01 mm so the suggestion actually clears the bar.
+  return Math.max(0.01, Math.floor((currentFloor_mm * budget_mm2) / requested_mm2 * 100) / 100);
+}
+
 /** Length of a projected line, metres. */
 function lineLength(points: Pt[]): number {
   let total = 0;
@@ -182,10 +208,23 @@ export function selectLegibleSubtypes(
   printedWidth_mm: (subtype: string) => number,
   scale_mm_per_m: number,
   modelArea_mm2: number,
-): { kept: Set<string>; dropped: string[] } {
+): {
+  kept: Set<string>;
+  dropped: string[];
+  /** Printed area the kept classes use. */
+  spent_mm2: number;
+  /** Printed area every requested class would use, kept or not. */
+  requested_mm2: number;
+  budget_mm2: number;
+} {
   const kept = new Set<string>();
   const dropped: string[] = [];
   const budget_mm2 = modelArea_mm2 * COVERAGE_LIMIT;
+  let requested_mm2 = 0;
+  for (const subtype of ordered) {
+    const length_m = lengthBySubtype.get(subtype) ?? 0;
+    if (length_m > 0) requested_mm2 += length_m * scale_mm_per_m * printedWidth_mm(subtype);
+  }
   let spent = 0;
 
   for (let i = 0; i < ordered.length; i++) {
@@ -204,7 +243,7 @@ export function selectLegibleSubtypes(
     spent += area_mm2;
   }
 
-  return { kept, dropped };
+  return { kept, dropped, spent_mm2: spent, requested_mm2, budget_mm2 };
 }
 
 /** A run of consecutive points kept after the water split. */
@@ -332,53 +371,39 @@ export function waterRings(polygons: PolygonFeature[], scale: ResolvedScale): Ri
   return rings;
 }
 
-export interface LineLayerResult {
-  part: MeshPart | null;
-  stats: FeatureBuildStats;
+/**
+ * What a line layer will contain, decided before any geometry is built.
+ *
+ * The map preview and the mesh builder both read this, so what the map
+ * highlights is what the model gets — by construction, not by two
+ * implementations agreeing to stay in step.
+ */
+export interface LayerPlan {
+  /** Subtypes that will be built. */
+  kept: Set<string>;
+  /** Subtypes requested but cut, in importance order. */
+  dropped: string[];
+  /** Printed width per subtype, millimetres. */
+  widthBySubtype: Map<string, number>;
+  /** Printed width for any real-world width, millimetres. */
+  widthFor: (width_m: number) => number;
+  /** The floor in force, after resolving 'auto'. */
+  minWidth_mm: number;
+  /** Floor at which nothing would be cut; 0 when nothing was. */
+  suggestedMinWidth_mm: number;
+  /** Centrelines in local ENU metres, so the builder does not project twice. */
+  projected: Map<LineFeature, Pt[]>;
 }
 
-/**
- * Build one MeshPart for a whole line layer.
- *
- * @param features every line already classified into this layer
- */
-export function buildLineLayer(
+export function planLineLayer(
   layer: LayerId,
   features: LineFeature[],
-  water: Ring[],
-  options: BuildFeaturesOptions,
-): LineLayerResult {
-  const settings = options.layers[layer];
-  const stats: FeatureBuildStats = {
-    layer,
-    features: 0,
-    triangles: 0,
-    truncated: false,
-    drownedSegments: 0,
-    widthClamped: false,
-    width_mm: 0,
-    narrowestWidth_mm: Infinity,
-    droppedSubtypes: [],
-  };
+  settings: LayerSettings,
+  scale: ResolvedScale,
+  nozzleDiameter_mm: number,
+): LayerPlan {
+  const minWidth_mm = resolveMinWidth_mm(settings.minWidth_mm, nozzleDiameter_mm);
 
-  if (!settings?.enabled || features.length === 0) {
-    stats.narrowestWidth_mm = 0;
-    return { part: null, stats };
-  }
-
-  const { heightfield, scale } = options;
-  const terrainStep_m = Math.max(heightfield.spacingX_m, heightfield.spacingY_m);
-  const minWidth_mm = resolveMinWidth_mm(settings.minWidth_mm, options.nozzleDiameter_mm);
-  const height_mm = Math.max(0.1, settings.height_mm * settings.heightScale);
-  const penetration_mm = Math.max(1.0, height_mm * 0.5);
-  const minBottom_mm = Math.min(0.2, options.baseThickness_mm / 2);
-
-  // Group every centreline by the printed width it resolves to. There are only
-  // a handful of distinct road widths, so this turns thousands of separate
-  // ribbon fields into two or three networks.
-  const byWidth = new Map<number, { width_mm: number; lines: Pt[][]; bridges: Pt[][] }>();
-
-  // Decide which classes the model can carry before building anything.
   const projected = new Map<LineFeature, Pt[]>();
   const lengthBySubtype = new Map<string, number>();
   const naturalBySubtype = new Map<string, number>();
@@ -408,8 +433,7 @@ export function buildLineLayer(
     widthBySubtype.set(subtype, widthFor(natural_m));
   }
 
-  const modelArea_mm2 =
-    scale.extentX_m * scale.scale * (scale.extentY_m * scale.scale);
+  const modelArea_mm2 = scale.extentX_m * scale.scale * (scale.extentY_m * scale.scale);
   const selection = settings.legibilityFilter
     ? selectLegibleSubtypes(
         LAYER_BY_ID[layer].subtypes,
@@ -418,9 +442,80 @@ export function buildLineLayer(
         scale.scale,
         modelArea_mm2,
       )
-    : { kept: new Set(lengthBySubtype.keys()), dropped: [] as string[] };
+    : {
+        kept: new Set(lengthBySubtype.keys()),
+        dropped: [] as string[],
+        spent_mm2: 0,
+        requested_mm2: 0,
+        budget_mm2: 0,
+      };
 
-  stats.droppedSubtypes = selection.dropped;
+  return {
+    kept: selection.kept,
+    dropped: selection.dropped,
+    widthBySubtype,
+    widthFor,
+    minWidth_mm,
+    suggestedMinWidth_mm:
+      selection.dropped.length > 0
+        ? minWidthToFit_mm(minWidth_mm, selection.requested_mm2, selection.budget_mm2)
+        : 0,
+    projected,
+  };
+}
+
+export interface LineLayerResult {
+  part: MeshPart | null;
+  stats: FeatureBuildStats;
+}
+
+/**
+ * Build one MeshPart for a whole line layer.
+ *
+ * @param features every line already classified into this layer
+ */
+export function buildLineLayer(
+  layer: LayerId,
+  features: LineFeature[],
+  water: Ring[],
+  options: BuildFeaturesOptions,
+): LineLayerResult {
+  const settings = options.layers[layer];
+  const stats: FeatureBuildStats = {
+    layer,
+    features: 0,
+    triangles: 0,
+    truncated: false,
+    drownedSegments: 0,
+    widthClamped: false,
+    width_mm: 0,
+    narrowestWidth_mm: Infinity,
+    droppedSubtypes: [],
+    suggestedMinWidth_mm: 0,
+  };
+
+  if (!settings?.enabled || features.length === 0) {
+    stats.narrowestWidth_mm = 0;
+    return { part: null, stats };
+  }
+
+  const { heightfield, scale } = options;
+  const terrainStep_m = Math.max(heightfield.spacingX_m, heightfield.spacingY_m);
+  const height_mm = Math.max(0.1, settings.height_mm * settings.heightScale);
+  const penetration_mm = Math.max(1.0, height_mm * 0.5);
+  const minBottom_mm = Math.min(0.2, options.baseThickness_mm / 2);
+
+  // Group every centreline by the printed width it resolves to. There are only
+  // a handful of distinct road widths, so this turns thousands of separate
+  // ribbon fields into two or three networks.
+  const byWidth = new Map<number, { width_mm: number; lines: Pt[][]; bridges: Pt[][] }>();
+
+  const plan = planLineLayer(layer, features, settings, scale, options.nozzleDiameter_mm);
+  const { projected, widthFor } = plan;
+  const selection = { kept: plan.kept, dropped: plan.dropped };
+
+  stats.droppedSubtypes = plan.dropped;
+  stats.suggestedMinWidth_mm = plan.suggestedMinWidth_mm;
 
   for (const feature of features) {
     const projectedPoints = projected.get(feature);

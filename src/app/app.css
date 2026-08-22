@@ -726,6 +726,60 @@ body {
   margin-bottom: 2px;
 }
 
+.subtypes__bulk {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+/* Ticked, but the legibility filter cut it from the last build. */
+.checkbox--cut {
+  opacity: 0.6;
+}
+
+.subtypes__cut {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--warn, #d9a441);
+  border: 1px solid currentColor;
+}
+
+.btn--link {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: inherit;
+  color: var(--accent, #e07a3f);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.btn--link:hover:not(:disabled) {
+  background: none;
+  filter: brightness(1.2);
+}
+
+.field__hint--action {
+  line-height: 1.5;
+}
+
+.field__hint--bad {
+  color: var(--bad, #e05c5c);
+}
+
+.preview {
+  margin: 0 0 12px;
+}
+
+.preview .field__hint {
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

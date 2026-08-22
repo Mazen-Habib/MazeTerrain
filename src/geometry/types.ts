@@ -44,11 +44,32 @@ export interface PrintWarning {
   message: string;
 }
 
+/**
+ * What one layer's build actually did, so the Layers panel can reflect it back.
+ *
+ * Without this the panel shows a tick beside `residential` while the model has
+ * no residential streets in it — the legibility filter having dropped them —
+ * and the user has no way to see the difference between what they asked for and
+ * what they got.
+ */
+export interface LayerBuildSummary {
+  layer: string;
+  /** Classes the filter left out at this size, in importance order. */
+  dropped: string[];
+  /** Printed width range actually used, millimetres. */
+  narrowestWidth_mm: number;
+  widestWidth_mm: number;
+  /** Floor at which every requested class would have fitted; 0 if none dropped. */
+  suggestedMinWidth_mm: number;
+}
+
 export interface MeshBundle {
   parts: MeshPart[];
   stats: MeshStats;
   warnings: PrintWarning[];
   validation: ValidationResult;
+  /** One entry per line layer that was built. */
+  layers: LayerBuildSummary[];
 }
 
 /** docs/05-geometry-pipeline.md, Stage 9. */

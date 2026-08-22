@@ -25,6 +25,7 @@ import type { Route } from '../data/gpx/types';
 import type {
   GenerateConfig,
   GenerateRequest,
+  LayerBuildSummary,
   MeshBundle,
   MeshPart,
   PrintWarning,
@@ -65,6 +66,7 @@ export async function assemble(
   const { config, routes, selectionRing } = request;
   const started = performance.now();
   const warnings: PrintWarning[] = [];
+  const layerSummaries: LayerBuildSummary[] = [];
 
   const report: ProgressCallback = (p) => onProgress?.(p);
   const throwIfAborted = () => {
@@ -313,6 +315,13 @@ export async function assemble(
         });
         if (built.part) featureParts.push(built.part);
         featureTriangles += built.stats.triangles;
+        layerSummaries.push({
+          layer,
+          dropped: built.stats.droppedSubtypes,
+          narrowestWidth_mm: built.stats.narrowestWidth_mm,
+          widestWidth_mm: built.stats.width_mm,
+          suggestedMinWidth_mm: built.stats.suggestedMinWidth_mm,
+        });
 
         if (built.stats.truncated) {
           warnings.push({
@@ -331,8 +340,11 @@ export async function assemble(
             code: 'classes-below-nozzle',
             message:
               `${built.stats.droppedSubtypes.join(', ')} were left out — at this size ` +
-              `they would fill the model rather than read as streets. Print larger, ` +
-              `select a smaller area, or turn off "Only classes the model can carry".`,
+              `they would fill the model rather than read as streets. ` +
+              `To keep them, set ${LAYER_BY_ID[layer].label} → Min width to about ` +
+              `${built.stats.suggestedMinWidth_mm.toFixed(2)} mm, which draws the same ` +
+              `streets thinner instead of dropping any. Or untick the classes you do ` +
+              `not want under "Include", so the rest fit.`,
           });
         }
 
@@ -561,6 +573,7 @@ export async function assemble(
     },
     warnings,
     validation,
+    layers: layerSummaries,
   };
 
   report({ stage: 'done', percent: 100, detail: 'Done' });

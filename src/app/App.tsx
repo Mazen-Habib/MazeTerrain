@@ -26,6 +26,10 @@ import {
   type SelectionShape,
 } from '../geometry/selection';
 import type { GenerateConfig, MeshBundle, Progress, ProgressStage, SerialisableRoute } from '../geometry/types';
+import type { LineFeature } from '../data/osm/normalise';
+import { normalise } from '../data/osm/normalise';
+import { fetchOsm, OverpassError } from '../data/osm/overpass';
+import { buildFeaturePreview, enabledLineLayers } from '../map/featurePreview';
 import { BASEMAPS } from '../map/basemaps';
 import type { DrawTool, LonLat } from '../map/draw';
 import { MapView } from '../map/MapView';
@@ -119,6 +123,16 @@ export function App() {
   const [bundle, setBundle] = useState<MeshBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(true);
+
+  /**
+   * OSM lines for the current selection, fetched on demand so the map can show
+   * what the model will contain before it is built. Held raw: re-filtering when
+   * a class is ticked or the width changes is instant and costs no network.
+   */
+  const [previewLines, setPreviewLines] = useState<LineFeature[] | null>(null);
+  const [previewBBox, setPreviewBBox] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const busy = progress !== null;
   const builtSlug = useRef('model');
@@ -252,6 +266,48 @@ export function App() {
     }
   }, [config, routes, shape, areaLabel]);
 
+  /**
+   * Fetch the map features for this selection so they can be shown before the
+   * build. This is the same query and the same IndexedDB cache the worker uses,
+   * so previewing warms the cache rather than costing an extra round trip.
+   *
+   * Explicit, never automatic: pan and settings changes must not fire network
+   * work (CLAUDE.md, Performance).
+   */
+  const onPreviewFeatures = useCallback(async () => {
+    const layers = enabledLineLayers(config);
+    if (layers.length === 0) {
+      setPreviewError('No line layers are switched on.');
+      return;
+    }
+    setPreviewBusy(true);
+    setPreviewError(null);
+    try {
+      const response = await fetchOsm(config.bbox, layers);
+      setPreviewLines(normalise(response).lines);
+      setPreviewBBox(JSON.stringify(config.bbox));
+    } catch (err) {
+      setPreviewLines(null);
+      setPreviewError(
+        err instanceof OverpassError
+          ? err.userMessage
+          : `Could not load map features: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [config]);
+
+  // The preview belongs to the selection it was fetched for. Moving the
+  // selection must clear it rather than leave roads highlighted somewhere else.
+  const selectionKey = JSON.stringify(config.bbox);
+  const previewStale = previewLines !== null && previewBBox !== selectionKey;
+
+  const preview = useMemo(
+    () => (previewLines && !previewStale ? buildFeaturePreview(previewLines, config) : null),
+    [previewLines, previewStale, config],
+  );
+
   const onCancel = useCallback(() => {
     cancelGeneration();
     terminateWorker();
@@ -329,6 +385,12 @@ export function App() {
             layers={config.layers}
             busy={busy}
             nozzleDiameter_mm={config.nozzleDiameter_mm}
+            summaries={bundle?.layers ?? []}
+            preview={preview?.summary ?? null}
+            previewBusy={previewBusy}
+            previewError={previewError}
+            previewStale={previewStale}
+            onPreview={onPreviewFeatures}
             onChange={updateLayer}
           />
 
@@ -561,6 +623,7 @@ export function App() {
               shape={shape}
               tool={tool}
               routes={routes}
+              featurePreview={preview?.geojson ?? null}
               onShapeChange={(next) => applyShape(next, 'Custom selection')}
               onToolFinished={() => setTool(null)}
               onCursor={setCursor}

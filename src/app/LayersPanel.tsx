@@ -7,6 +7,8 @@
 import { useState } from 'react';
 import { LAYERS, type LayerId } from '../data/osm/tags';
 import type { LayerSettings } from '../geometry/features';
+import type { LayerBuildSummary } from '../geometry/types';
+import type { PreviewSummary } from '../map/featurePreview';
 import { NumberField } from './NumberField';
 
 interface LayersPanelProps {
@@ -14,6 +16,15 @@ interface LayersPanelProps {
   busy: boolean;
   /** Drives the "auto" min-width hint, so the panel shows the number in force. */
   nozzleDiameter_mm: number;
+  /** What the last build actually did, so ticked-but-absent classes are visible. */
+  summaries: LayerBuildSummary[];
+  /** What the on-map preview currently shows, or null when none is loaded. */
+  preview: PreviewSummary | null;
+  previewBusy: boolean;
+  previewError: string | null;
+  /** True when the selection moved after the preview was fetched. */
+  previewStale: boolean;
+  onPreview: () => void;
   onChange: (id: LayerId, patch: Partial<LayerSettings>) => void;
 }
 
@@ -33,7 +44,18 @@ const GLYPH: Record<LayerId, string> = {
 /** Layers whose geometry is not built yet, so the toggle cannot mislead. */
 const NOT_YET_BUILT = new Set<LayerId>(['water', 'buildings', 'greenery', 'sand']);
 
-export function LayersPanel({ layers, busy, nozzleDiameter_mm, onChange }: LayersPanelProps) {
+export function LayersPanel({
+  layers,
+  busy,
+  nozzleDiameter_mm,
+  summaries,
+  preview,
+  previewBusy,
+  previewError,
+  previewStale,
+  onPreview,
+  onChange,
+}: LayersPanelProps) {
   const [expanded, setExpanded] = useState<LayerId | null>(null);
 
   return (
@@ -43,12 +65,45 @@ export function LayersPanel({ layers, busy, nozzleDiameter_mm, onChange }: Layer
         Map features come from OpenStreetMap and are fetched on Generate, never on pan.
       </p>
 
+      <div className="preview">
+        <button className="btn btn--wide" onClick={onPreview} disabled={previewBusy}>
+          {previewBusy ? 'Loading features…' : 'Show on map'}
+        </button>
+        {previewError ? (
+          <p className="field__hint field__hint--bad">{previewError}</p>
+        ) : previewStale ? (
+          <p className="field__hint">
+            The selection moved. Press “Show on map” again for the new area.
+          </p>
+        ) : preview ? (
+          <p className="field__hint">
+            {preview.included.toLocaleString()} of {preview.drawn.toLocaleString()} lines will be
+            built. Dashed lines are in your Include list but will be cut at this size — they are
+            not in the model.
+          </p>
+        ) : (
+          <p className="field__hint">
+            Draws the exact features this model will contain, so you can check before generating.
+          </p>
+        )}
+      </div>
+
       <ul className="layers">
         {LAYERS.map((definition) => {
           const settings = layers[definition.id];
           if (!settings) return null;
           const pending = NOT_YET_BUILT.has(definition.id);
           const open = expanded === definition.id;
+          const built = summaries.find((x) => x.layer === definition.id);
+          // Prefer the live preview: it reflects the settings as they stand,
+          // where the build summary reflects whatever was last generated.
+          const previewDropped = preview?.droppedByLayer[definition.id];
+          const dropped = previewDropped ?? built?.dropped ?? [];
+          const suggested =
+            (previewDropped ? preview?.suggestedMinWidth_mm[definition.id] : undefined) ??
+            built?.suggestedMinWidth_mm ??
+            0;
+          const droppedSet = new Set(dropped);
 
           return (
             <li key={definition.id} className={`layer${open ? ' layer--open' : ''}`}>
@@ -169,23 +224,72 @@ export function LayersPanel({ layers, busy, nozzleDiameter_mm, onChange }: Layer
 
                   <fieldset className="subtypes">
                     <legend className="field__label">Include</legend>
-                    {definition.subtypes.map((subtype) => (
-                      <label key={subtype} className="checkbox">
-                        <input
-                          type="checkbox"
-                          checked={settings.subtypes.includes(subtype)}
-                          disabled={busy}
-                          onChange={(e) => {
-                            const next = e.target.checked
-                              ? [...settings.subtypes, subtype]
-                              : settings.subtypes.filter((s) => s !== subtype);
-                            onChange(definition.id, { subtypes: next });
-                          }}
-                        />
-                        {subtype}
-                      </label>
-                    ))}
+                    <div className="subtypes__bulk">
+                      <button
+                        className="btn btn--link"
+                        disabled={busy}
+                        onClick={() =>
+                          onChange(definition.id, { subtypes: [...definition.subtypes] })
+                        }
+                      >
+                        All
+                      </button>
+                      <button
+                        className="btn btn--link"
+                        disabled={busy}
+                        onClick={() => onChange(definition.id, { subtypes: [] })}
+                      >
+                        None
+                      </button>
+                    </div>
+                    {definition.subtypes.map((subtype) => {
+                      const ticked = settings.subtypes.includes(subtype);
+                      // Ticked but absent from the last build: the legibility
+                      // filter cut it. Without this the panel claims the model
+                      // has streets it does not have.
+                      const cut = ticked && droppedSet.has(subtype);
+                      return (
+                        <label
+                          key={subtype}
+                          className={`checkbox${cut ? ' checkbox--cut' : ''}`}
+                          title={
+                            cut
+                              ? 'Will not be built — the model cannot carry this class at ' +
+                                'this size. Lower Min width to fit it in.'
+                              : undefined
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={ticked}
+                            disabled={busy}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...settings.subtypes, subtype]
+                                : settings.subtypes.filter((s) => s !== subtype);
+                              onChange(definition.id, { subtypes: next });
+                            }}
+                          />
+                          {subtype}
+                          {cut ? <span className="subtypes__cut">not built</span> : null}
+                        </label>
+                      );
+                    })}
                   </fieldset>
+
+                  {dropped.length > 0 && suggested > 0 ? (
+                    <p className="field__hint field__hint--action">
+                      {dropped.length} class(es) will not be built at this size.{' '}
+                      <button
+                        className="btn btn--link"
+                        disabled={busy}
+                        onClick={() => onChange(definition.id, { minWidth_mm: suggested })}
+                      >
+                        Set Min width to {suggested.toFixed(2)} mm
+                      </button>{' '}
+                      to keep them all — the same streets, drawn thinner.
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </li>
