@@ -81,9 +81,26 @@ Hand-rolling CSG for the cutout mode is a multi-week trap.
 ### Q10 — Insert bottom: draped or flat?
 For `single-color-cutout` + `inlay`, the insert's underside can follow the terrain
 (perfect seat, needs supports) or be flat (trivial print, only works on gentle terrain).
-**Current spec:** offer both, default draped with a warning.
-**Open:** is a third option — draped but split into flat-bottomed segments — worth it?
-**Status:** open
+**Previous spec:** offer both, default draped with a warning.
+**Resolved 2026-08-22 — flat only.** No draped option and no segmented third option. An
+insert that needs supports on its underside is an insert most people will print badly, and
+supporting a long thin overhang well is exactly the thing hobby printers do worst.
+
+Consequences, which the implementation has to carry:
+
+- The channel floor is flat too, or the insert cannot seat on it. Both are placed one
+  `insetDepth_mm` below the **lowest ground under the ribbon** — not under the centreline.
+  The ribbon is wide, and on a side slope its edge reaches lower than the line down the
+  middle; a floor set from the centreline leaves stretches with no channel cut at all.
+- The insert is handed the channel's floor rather than computing its own. Left to work it
+  out itself it gets a different answer, because it is narrower and so covers slightly
+  different ground.
+- On a route that climbs, the channel is as deep as the climb. `assemble` warns
+  (`cutout-deep-channel`) once that exceeds three times the requested depth, because it is
+  the real cost of this decision and the user should hear it before slicing rather than
+  after.
+
+**Status:** resolved
 
 ### Q11 — Route elevation when GPX has good barometric data
 Some users specifically want *their* recorded elevation, not the DEM. Currently specced

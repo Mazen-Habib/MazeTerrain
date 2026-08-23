@@ -18,6 +18,7 @@ import { GpxParseError, parseGpxText } from '../data/gpx/parse';
 import type { Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
 import { writeThreeMF, threeMFFilename } from '../export/threemf';
+import { writePartBundle, bundleFilename } from '../export/bundle';
 import { bboxCentre, resolveGrid } from '../geometry/coords';
 import {
   fitSelectionToRoutes,
@@ -28,6 +29,7 @@ import {
 } from '../geometry/selection';
 import type {
   ColorMode,
+  CutoutSubMode,
   GenerateConfig,
   MeshBundle,
   Progress,
@@ -385,6 +387,28 @@ export function App() {
   }, [bundle, blocked, config.modelWidth_mm, save]);
 
   /**
+   * The inlay insert is printed separately, in another filament, and pressed in
+   * afterwards — so it has to arrive as its own file rather than merged into
+   * the terrain. A ZIP of one STL per part plus a reassembly note is the shape
+   * that matches a single-extruder workflow.
+   */
+  const onDownloadParts = useCallback(() => {
+    if (!bundle || blocked) return;
+    save(
+      writePartBundle(bundle.parts, {
+        slug: builtSlug.current,
+        modelWidth_mm: config.modelWidth_mm,
+        clearance_mm: config.cutout.clearance_mm,
+      }),
+      bundleFilename(builtSlug.current, config.modelWidth_mm),
+      'application/zip',
+    );
+  }, [bundle, blocked, config.modelWidth_mm, config.cutout.clearance_mm, save]);
+
+  /** Two bodies that have to be printed apart, so the ZIP is the useful export. */
+  const hasSeparateParts = (bundle?.parts.length ?? 0) > 1;
+
+  /**
    * 3MF keeps each layer as its own object with its own material, so a slicer
    * opens the model with filaments already assigned. STL cannot: it has no
    * concept of parts, so a multicolour model exported as STL is one grey blob.
@@ -437,6 +461,16 @@ export function App() {
           >
             {busy ? 'Generating…' : 'Generate'}
           </button>
+          {config.colorMode === 'single-cutout' && hasSeparateParts ? (
+            <button
+              className="btn"
+              onClick={onDownloadParts}
+              disabled={!bundle || blocked || busy}
+              title="One STL per part, plus a note on how they fit together"
+            >
+              Download parts (ZIP)
+            </button>
+          ) : null}
           <button
             className="btn"
             onClick={onDownload3mf}
@@ -620,17 +654,71 @@ export function App() {
             </div>
 
             {config.colorMode === 'single-cutout' ? (
-              <NumberField
-                label="Channel depth"
-                unit="mm"
-                value={config.cutout.insetDepth_mm}
-                min={0.3}
-                max={4}
-                step={0.1}
-                disabled={busy}
-                onChange={(v) => update({ cutout: { ...config.cutout, insetDepth_mm: v } })}
-                hint="How deep the route cuts into the terrain."
-              />
+              <>
+                <div className="field">
+                  <label className="field__label" htmlFor="submode">
+                    Cutout style
+                  </label>
+                  <select
+                    id="submode"
+                    className="select"
+                    value={config.cutout.subMode}
+                    onChange={(e) =>
+                      update({
+                        cutout: { ...config.cutout, subMode: e.target.value as CutoutSubMode },
+                      })
+                    }
+                    disabled={busy}
+                  >
+                    <option value="groove">Groove — channel only, to paint or fill</option>
+                    <option value="inlay">Inlay — plus a separate insert to press in</option>
+                  </select>
+                  <p className="field__hint">
+                    {config.cutout.subMode === 'groove'
+                      ? 'One body with a recessed channel.'
+                      : 'Two bodies: the terrain with a cavity, and the route insert to print in a second colour.'}
+                  </p>
+                </div>
+
+                <NumberField
+                  label="Channel depth"
+                  unit="mm"
+                  value={config.cutout.insetDepth_mm}
+                  min={0.3}
+                  max={4}
+                  step={0.1}
+                  disabled={busy}
+                  onChange={(v) => update({ cutout: { ...config.cutout, insetDepth_mm: v } })}
+                  hint="Measured below the lowest ground the route crosses — the floor is flat so the insert seats without supports."
+                />
+
+                {config.cutout.subMode === 'inlay' ? (
+                  <>
+                    <NumberField
+                      label="Clearance"
+                      unit="mm"
+                      value={config.cutout.clearance_mm}
+                      min={0.05}
+                      max={0.5}
+                      step={0.05}
+                      disabled={busy}
+                      onChange={(v) => update({ cutout: { ...config.cutout, clearance_mm: v } })}
+                      hint="Gap per side. Too tight and the insert will not seat; too loose and it rattles. 0.15 mm is the usual FDM press fit."
+                    />
+                    <NumberField
+                      label="Insert proud"
+                      unit="mm"
+                      value={config.cutout.insertProud_mm}
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      disabled={busy}
+                      onChange={(v) => update({ cutout: { ...config.cutout, insertProud_mm: v } })}
+                      hint="How far the insert stands above the terrain once seated."
+                    />
+                  </>
+                ) : null}
+              </>
             ) : null}
 
             <div className="field">

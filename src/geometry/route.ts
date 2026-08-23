@@ -33,6 +33,13 @@ export interface RouteBuildStats {
   triangles: number;
   /** True when width_mm had to be raised to the nozzle minimum. */
   widthClamped: boolean;
+  /**
+   * The flat floor this build used, print mm. Only set for cutout builds.
+   *
+   * Read back so the insert can be given the CHANNEL's floor rather than
+   * computing its own — see `cut.floor_mm`.
+   */
+  flatBottom_mm?: number;
 }
 
 export interface RouteBuildResult {
@@ -100,14 +107,42 @@ export interface BuildRouteOptions {
   nozzleDiameter_mm: number;
   baseThickness_mm: number;
   /**
-   * Build the route as a cutting tool rather than a raised ridge.
+   * What this build of the route is for.
    *
-   * Same footprint, different vertical extent: it reaches `depth_mm` below the
-   * terrain to make the channel, and `proud_mm` above it so the subtract opens
-   * the surface cleanly instead of leaving a skin where the tool stops exactly
-   * at the terrain it was draped on.
+   * All three share one centreline and one width calculation, so the ridge, the
+   * channel and the insert are the same shape by construction rather than by
+   * three code paths agreeing to stay in step.
+   *
+   * - `cut` reaches below the terrain to carve the channel, and above it so the
+   *   subtract opens the surface instead of leaving a skin where the tool stops
+   *   exactly at the terrain it was draped on.
+   * - `insert` is the piece that seats in that channel: narrowed by the
+   *   clearance on each side, standing `proud_mm` above the terrain.
+   *
+   * Both use a FLAT underside at one shared Z (OPEN-QUESTIONS **Q10**, resolved
+   * 2026-08-23). A draped insert seats perfectly but needs supports under every
+   * overhang; a flat one prints with none. The cost is that the channel is as
+   * deep as the route's lowest point, so on steep ground it removes a lot of
+   * material — `assemble` warns when that gets significant.
    */
-  cut?: { depth_mm: number; proud_mm: number };
+  cut?: {
+    kind: 'cut' | 'insert';
+    /** Channel floor, measured below the LOWEST terrain the route crosses. */
+    depth_mm: number;
+    proud_mm: number;
+    /** Gap per side between insert and cavity. Ignored for `cut`. */
+    clearance_mm?: number;
+    /**
+     * Use this floor instead of computing one.
+     *
+     * The insert has to be given the channel's floor. Left to work it out
+     * itself it would compute a different one: it is narrower, so its footprint
+     * covers slightly different ground, and the lowest point under it is not
+     * the lowest point under the channel. The insert would then float above the
+     * floor, or on a side slope bind against it.
+     */
+    floor_mm?: number;
+  };
 }
 
 export function buildRouteSolid(route: Route, options: BuildRouteOptions): RouteBuildResult {
@@ -135,7 +170,15 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
   // 5. Width: print millimetres converted to world metres, clamped to printable.
   const minWidth_mm = minPrintableWidth_mm(nozzleDiameter_mm);
   const widthClamped = style.width_mm < minWidth_mm;
-  const width_mm = widthClamped ? minWidth_mm : style.width_mm;
+  let width_mm = widthClamped ? minWidth_mm : style.width_mm;
+
+  // The insert is the same ribbon, narrower. Shrinking the width is exactly the
+  // "shrink by clearance on the XY normals" the spec asks for, because the
+  // ribbon comes from a distance field — a narrower field IS the inward offset,
+  // with none of the self-intersection an explicit polygon offset invites.
+  if (options.cut?.kind === 'insert') {
+    width_mm = Math.max(0.01, width_mm - 2 * (options.cut.clearance_mm ?? 0));
+  }
   const width_m = width_mm / scale.scale;
 
   const emptyStats: RouteBuildStats = {
@@ -173,6 +216,28 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
       : (x_m: number, y_m: number) =>
           worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2];
 
+  // One flat floor for the channel and the piece that seats in it, placed under
+  // the lowest ground the route crosses so the channel exists along all of it.
+  let flatBottom_mm: number | undefined;
+  if (options.cut) {
+    // Sampled over the FOOTPRINT, not the centreline. The ribbon is wide, and
+    // its edges reach ground the centreline never crosses — often lower. Taking
+    // the centreline minimum puts the floor above the lowest point the channel
+    // actually spans, which makes the cut shallower than asked for there and,
+    // on a side slope, leaves stretches with no channel cut at all.
+    if (options.cut.floor_mm !== undefined) {
+      flatBottom_mm = options.cut.floor_mm;
+    } else {
+      let lowest = Infinity;
+      for (const polygon of footprint) {
+        for (const ring of polygon) {
+          for (const [x_m, y_m] of ring) lowest = Math.min(lowest, sampleTerrainZ(x_m, y_m));
+        }
+      }
+      if (Number.isFinite(lowest)) flatBottom_mm = lowest - options.cut.depth_mm;
+    }
+  }
+
   const mesh = extrudeDraped(
     footprint,
     sampleTerrainZ,
@@ -180,6 +245,7 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
     {
       height_mm: options.cut ? options.cut.proud_mm : style.height_mm,
       penetration_mm: options.cut ? options.cut.depth_mm : penetrationFor(style.height_mm),
+      ...(flatBottom_mm !== undefined ? { flatBottom_mm } : {}),
       // Keep the underside strictly inside the base slab, never coplanar with
       // it and never below the build plate. A cutting tool is exempt: it is
       // never printed, and clamping it would make the channel shallower than
@@ -189,5 +255,12 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
     },
   );
 
-  return { mesh, stats: { ...emptyStats, triangles: mesh.triangles } };
+  return {
+    mesh,
+    stats: {
+      ...emptyStats,
+      triangles: mesh.triangles,
+      ...(flatBottom_mm !== undefined ? { flatBottom_mm } : {}),
+    },
+  };
 }

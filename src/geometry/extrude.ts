@@ -32,6 +32,15 @@ export interface ExtrudeOptions {
   minBottom_mm: number;
   /** Triangles are subdivided until no edge exceeds this, so the drape follows terrain. */
   maxEdge_m: number;
+  /**
+   * Put the underside at this absolute Z instead of following the terrain.
+   *
+   * For the inlay insert and the channel it seats into. Both have to share one
+   * flat floor or the insert cannot sit flush, and a floor that follows the
+   * terrain is not flat by definition. The top still drapes, so the piece looks
+   * right from above and only its thickness varies.
+   */
+  flatBottom_mm?: number;
 }
 
 export interface SolidMesh {
@@ -260,7 +269,10 @@ export function extrudeDraped(
       const terrainZ = sampleTerrainZ(x_m, y_m);
 
       const top = terrainZ + options.height_mm;
-      const bottom = Math.max(options.minBottom_mm, terrainZ - options.penetration_mm);
+      const bottom =
+        options.flatBottom_mm !== undefined
+          ? options.flatBottom_mm
+          : Math.max(options.minBottom_mm, terrainZ - options.penetration_mm);
 
       positions.push(x_mm, y_mm, top);
       positions.push(x_mm, y_mm, bottom);

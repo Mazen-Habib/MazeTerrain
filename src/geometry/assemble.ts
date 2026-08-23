@@ -445,6 +445,8 @@ export async function assemble(
    * cut is exactly what would have been raised — the two cannot drift.
    */
   const cutTools: MeshPart[] = [];
+  /** The pieces that seat in those channels, for the inlay sub-mode. */
+  const insertParts: MeshPart[] = [];
   const wantsCut = config.colorMode === 'single-cutout';
 
   if (visibleRoutes.length > 0) {
@@ -476,13 +478,18 @@ export async function assemble(
       }
 
       if (wantsCut && built.stats.triangles > 0) {
-        const tool = buildRouteSolid(toRoute(record), {
+        const common = {
           heightfield,
           scale,
           selection: featureClip,
           nozzleDiameter_mm: config.nozzleDiameter_mm,
           baseThickness_mm: config.baseThickness_mm,
+        };
+
+        const tool = buildRouteSolid(toRoute(record), {
+          ...common,
           cut: {
+            kind: 'cut' as const,
             depth_mm: config.cutout.insetDepth_mm,
             // Generous: the tool only has to clear the local surface, and a
             // channel that fails to break through is worse than a tall tool.
@@ -497,6 +504,69 @@ export async function assemble(
             indices: tool.mesh.indices,
             manifold: true,
           });
+
+          // The flat floor sits under the route's LOWEST point, so on a route
+          // that climbs, the channel is as deep as the climb. That is the cost
+          // of a flat-bottomed insert (OPEN-QUESTIONS Q10) and the user should
+          // hear about it rather than discover it in the slicer.
+          let lowZ = Infinity;
+          let highZ = -Infinity;
+          for (let v = 2; v < tool.mesh.positions.length; v += 3) {
+            const z = tool.mesh.positions[v];
+            if (z < lowZ) lowZ = z;
+            if (z > highZ) highZ = z;
+          }
+          const relief_mm =
+            highZ - lowZ - config.cutout.insetDepth_mm - Math.max(1, config.cutout.insetDepth_mm);
+          if (relief_mm > 3 * config.cutout.insetDepth_mm) {
+            warnings.push({
+              level: 'warn',
+              code: 'cutout-deep-channel',
+              message:
+                `"${record.name}" climbs ${relief_mm.toFixed(1)} mm across the model, and the ` +
+                `channel floor is flat, so at the high end it cuts ` +
+                `${(relief_mm + config.cutout.insetDepth_mm).toFixed(1)} mm deep. Reduce the ` +
+                `vertical exaggeration, or use a shorter route, if that is more material ` +
+                `than you want removed.`,
+            });
+          }
+        }
+
+        // The inlay sub-mode also emits the piece that seats in that channel.
+        if (config.cutout.subMode === 'inlay') {
+          const insert = buildRouteSolid(toRoute(record), {
+            ...common,
+            cut: {
+              kind: 'insert' as const,
+              depth_mm: config.cutout.insetDepth_mm,
+              proud_mm: config.cutout.insertProud_mm,
+              clearance_mm: config.cutout.clearance_mm,
+              // The channel's floor, not one worked out from the narrower
+              // insert footprint, or the insert does not seat on it.
+              ...(tool.stats.flatBottom_mm !== undefined
+                ? { floor_mm: tool.stats.flatBottom_mm }
+                : {}),
+            },
+          });
+          if (insert.mesh.triangles > 0) {
+            insertParts.push({
+              name: `insert:${i}`,
+              color: record.style.color,
+              positions: insert.mesh.positions,
+              indices: insert.mesh.indices,
+              manifold: true,
+            });
+          }
+          if (insert.stats.width_mm <= 2 * config.nozzleDiameter_mm) {
+            warnings.push({
+              level: 'warn',
+              code: 'insert-too-narrow',
+              message:
+                `"${record.name}" leaves an insert only ${insert.stats.width_mm.toFixed(2)} mm ` +
+                `wide once ${config.cutout.clearance_mm} mm clearance is taken off each side. ` +
+                `Widen the route, or reduce the clearance.`,
+            });
+          }
         }
       }
 
@@ -646,6 +716,9 @@ export async function assemble(
 
         parts = [
           await subtractParts(base, cutTools, { name: 'model', color: TERRAIN_COLOR }),
+          // Inserts stay separate on purpose: the whole point is that they are
+          // printed apart, in another colour, and pressed in afterwards.
+          ...insertParts,
         ];
 
         if (cutTools.length === 0) {
