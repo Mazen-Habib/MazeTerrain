@@ -101,6 +101,14 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
     // 256 mm square: the Bambu X1/P1 bed, and close enough to a Prusa MK4 that
     // it is a useful default rather than an arbitrary one.
     bedSize_mm: [256, 256],
+    colorMode: 'multicolor',
+    cutout: {
+      subMode: 'groove',
+      // 0.15 mm per side is the standard FDM press-fit starting point.
+      clearance_mm: 0.15,
+      insetDepth_mm: 1.0,
+      insertProud_mm: 0.4,
+    },
     layers: defaultLayers(),
   };
 }

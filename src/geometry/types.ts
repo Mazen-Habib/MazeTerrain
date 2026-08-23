@@ -99,6 +99,31 @@ export interface BBox {
 }
 
 /** Everything the worker needs to build a mesh. Serialisable; this is the dirty-state key. */
+/**
+ * docs/02-feature-spec.md F6. Three distinct behaviours that must not be
+ * conflated: separate objects per layer, one body with the route raised, or one
+ * body with the route cut out of it.
+ */
+export type ColorMode = 'multicolor' | 'single-raised' | 'single-cutout';
+
+/** `groove` leaves a channel to paint or fill; `inlay` also emits the insert. */
+export type CutoutSubMode = 'groove' | 'inlay';
+
+export interface CutoutSettings {
+  subMode: CutoutSubMode;
+  /**
+   * Gap between insert and cavity, per side.
+   *
+   * docs/02-feature-spec.md: "the clearance is the whole ballgame. Too tight
+   * and the insert won't seat; too loose and it rattles."
+   */
+  clearance_mm: number;
+  /** How deep the channel cuts below the terrain surface. */
+  insetDepth_mm: number;
+  /** How far the insert stands above the terrain once seated. */
+  insertProud_mm: number;
+}
+
 export interface GenerateConfig {
   bbox: BBox;
   dataset: string;
@@ -128,6 +153,9 @@ export interface GenerateConfig {
    * how much.
    */
   bedSize_mm: [number, number] | null;
+  /** docs/02-feature-spec.md F6. */
+  colorMode: ColorMode;
+  cutout: CutoutSettings;
   /**
    * The printer's horizontal resolution limit. Not decoration either: it is the
    * floor on the terrain sampling step, because sampling finer than the nozzle

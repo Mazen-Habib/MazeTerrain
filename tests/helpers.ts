@@ -41,6 +41,8 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     layerHeight_mm: 0.2,
     nozzleDiameter_mm: 0.4,
     bedSize_mm: [256, 256],
+    colorMode: 'multicolor',
+    cutout: { subMode: 'groove', clearance_mm: 0.15, insetDepth_mm: 1.0, insertProud_mm: 0.4 },
     layers: defaultLayers(),
     ...overrides,
   };

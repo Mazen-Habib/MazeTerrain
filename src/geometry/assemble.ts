@@ -15,6 +15,7 @@ import { buildHeightfield, smoothHeightfield } from './heightfield';
 import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
 import { repairAndValidate, validateMesh } from './validate';
+import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
 import {
   buildLineLayer,
@@ -437,6 +438,14 @@ export async function assemble(
   // --- Stage 6: route solids ------------------------------------------------
   const visibleRoutes = routes.filter((r) => r.style.visible);
   const routeParts: MeshPart[] = [];
+  /**
+   * The same routes built as cutting tools, for `single-cutout`.
+   *
+   * Built from the same centreline and width as the visible route, so what gets
+   * cut is exactly what would have been raised — the two cannot drift.
+   */
+  const cutTools: MeshPart[] = [];
+  const wantsCut = config.colorMode === 'single-cutout';
 
   if (visibleRoutes.length > 0) {
     report({
@@ -464,6 +473,31 @@ export async function assemble(
             `for a ${config.nozzleDiameter_mm} mm nozzle. Below it the slicer drops the route ` +
             `entirely.`,
         });
+      }
+
+      if (wantsCut && built.stats.triangles > 0) {
+        const tool = buildRouteSolid(toRoute(record), {
+          heightfield,
+          scale,
+          selection: featureClip,
+          nozzleDiameter_mm: config.nozzleDiameter_mm,
+          baseThickness_mm: config.baseThickness_mm,
+          cut: {
+            depth_mm: config.cutout.insetDepth_mm,
+            // Generous: the tool only has to clear the local surface, and a
+            // channel that fails to break through is worse than a tall tool.
+            proud_mm: Math.max(1, config.cutout.insetDepth_mm),
+          },
+        });
+        if (tool.mesh.triangles > 0) {
+          cutTools.push({
+            name: `cut:${i}`,
+            color: record.style.color,
+            positions: tool.mesh.positions,
+            indices: tool.mesh.indices,
+            manifold: true,
+          });
+        }
       }
 
       if (built.stats.clippedLength_m > 1) {
@@ -580,7 +614,68 @@ export async function assemble(
     manifold: validation.manifold,
   };
 
-  const parts = [terrainPart, ...featureParts, ...routeParts];
+  let parts = [terrainPart, ...featureParts, ...routeParts];
+
+  // --- Stage 7: colour mode (docs/02-feature-spec.md F6) --------------------
+  //
+  // Multicolour is the default and needs nothing: the parts already ARE the
+  // answer. The single-colour modes collapse them into one body, which is a
+  // real 3D boolean and the one place a CSG kernel is worth its weight.
+  if (config.colorMode !== 'multicolor' && parts.length > 1) {
+    report({
+      stage: 'building-routes',
+      percent: ROUTES_END,
+      detail:
+        config.colorMode === 'single-raised'
+          ? 'Merging into one body'
+          : 'Cutting the route out of the terrain',
+    });
+
+    try {
+      if (config.colorMode === 'single-raised') {
+        parts = [
+          await unionParts(parts, { name: 'model', color: TERRAIN_COLOR }),
+        ];
+      } else {
+        // Everything except the routes is the body; the routes become the tool.
+        const body = [terrainPart, ...featureParts];
+        const base =
+          body.length === 1
+            ? body[0]
+            : await unionParts(body, { name: 'model', color: TERRAIN_COLOR });
+
+        parts = [
+          await subtractParts(base, cutTools, { name: 'model', color: TERRAIN_COLOR }),
+        ];
+
+        if (cutTools.length === 0) {
+          warnings.push({
+            level: 'warn',
+            code: 'cutout-without-route',
+            message:
+              'Cutout mode has no route to cut. Upload a GPX, or switch back to ' +
+              'multicolour — as it stands this is just the terrain.',
+          });
+        }
+      }
+      throwIfAborted();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      // Falling back to multicolour leaves the user with a usable model and an
+      // explanation, rather than nothing at all.
+      warnings.push({
+        level: 'warn',
+        code: 'boolean-failed',
+        message:
+          err instanceof BooleanError
+            ? `${err.userMessage} The model was left as separate parts instead.`
+            : `Could not combine the parts into one body: ` +
+              `${err instanceof Error ? err.message : String(err)}. ` +
+              `The model was left as separate parts instead.`,
+      });
+      parts = [terrainPart, ...featureParts, ...routeParts];
+    }
+  }
 
   let triangles = 0;
   let vertices = 0;

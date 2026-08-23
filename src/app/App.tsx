@@ -26,7 +26,14 @@ import {
   selectionRingLonLat,
   type SelectionShape,
 } from '../geometry/selection';
-import type { GenerateConfig, MeshBundle, Progress, ProgressStage, SerialisableRoute } from '../geometry/types';
+import type {
+  ColorMode,
+  GenerateConfig,
+  MeshBundle,
+  Progress,
+  ProgressStage,
+  SerialisableRoute,
+} from '../geometry/types';
 import type { LineFeature } from '../data/osm/normalise';
 import { normalise } from '../data/osm/normalise';
 import { fetchOsm, OverpassError } from '../data/osm/overpass';
@@ -587,6 +594,44 @@ export function App() {
               </select>
               <p className="field__hint">Sets the floor on terrain detail.</p>
             </div>
+
+            <div className="field">
+              <label className="field__label" htmlFor="colormode">
+                Colour mode
+              </label>
+              <select
+                id="colormode"
+                className="select"
+                value={config.colorMode}
+                onChange={(e) => update({ colorMode: e.target.value as ColorMode })}
+                disabled={busy}
+              >
+                <option value="multicolor">Multicolour — one object per layer</option>
+                <option value="single-raised">Single colour, raised route</option>
+                <option value="single-cutout">Single colour, route cut out</option>
+              </select>
+              <p className="field__hint">
+                {config.colorMode === 'multicolor'
+                  ? 'Every layer stays a separate object. Export 3MF and the slicer assigns a filament to each.'
+                  : config.colorMode === 'single-raised'
+                    ? 'Everything merges into one body, with the route standing proud. Legible by relief alone — raise the route height for a stronger read.'
+                    : 'The route is cut out of the terrain, leaving a channel to paint or fill.'}
+              </p>
+            </div>
+
+            {config.colorMode === 'single-cutout' ? (
+              <NumberField
+                label="Channel depth"
+                unit="mm"
+                value={config.cutout.insetDepth_mm}
+                min={0.3}
+                max={4}
+                step={0.1}
+                disabled={busy}
+                onChange={(v) => update({ cutout: { ...config.cutout, insetDepth_mm: v } })}
+                hint="How deep the route cuts into the terrain."
+              />
+            ) : null}
 
             <div className="field">
               <label className="field__label" htmlFor="bed">

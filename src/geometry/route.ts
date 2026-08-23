@@ -99,6 +99,15 @@ export interface BuildRouteOptions {
   selection: Ring | null;
   nozzleDiameter_mm: number;
   baseThickness_mm: number;
+  /**
+   * Build the route as a cutting tool rather than a raised ridge.
+   *
+   * Same footprint, different vertical extent: it reaches `depth_mm` below the
+   * terrain to make the channel, and `proud_mm` above it so the subtract opens
+   * the surface cleanly instead of leaving a skin where the tool stops exactly
+   * at the terrain it was draped on.
+   */
+  cut?: { depth_mm: number; proud_mm: number };
 }
 
 export function buildRouteSolid(route: Route, options: BuildRouteOptions): RouteBuildResult {
@@ -169,11 +178,13 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
     sampleTerrainZ,
     (x_m, y_m) => [x_m * scale.scale, y_m * scale.scale],
     {
-      height_mm: style.height_mm,
-      penetration_mm: penetrationFor(style.height_mm),
+      height_mm: options.cut ? options.cut.proud_mm : style.height_mm,
+      penetration_mm: options.cut ? options.cut.depth_mm : penetrationFor(style.height_mm),
       // Keep the underside strictly inside the base slab, never coplanar with
-      // it and never below the build plate.
-      minBottom_mm: Math.min(0.2, options.baseThickness_mm / 2),
+      // it and never below the build plate. A cutting tool is exempt: it is
+      // never printed, and clamping it would make the channel shallower than
+      // asked for wherever the terrain dips.
+      minBottom_mm: options.cut ? -Infinity : Math.min(0.2, options.baseThickness_mm / 2),
       maxEdge_m: terrainStep_m,
     },
   );
