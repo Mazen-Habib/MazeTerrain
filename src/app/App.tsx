@@ -363,7 +363,7 @@ export function App() {
     <div className="layout">
       <header className="topbar">
         <h1>
-          MazeTerrain <span className="topbar__phase">Phase 1</span>
+          MazeTerrain <span className="topbar__phase">Phase 2</span>
         </h1>
 
         <div className="viewtoggle" role="tablist">
