@@ -664,12 +664,11 @@ export function buildLineLayer(
     height_mm,
     penetration_mm,
     minBottom_mm,
-    // No subdivision. The contour is already sampled at a third of the ribbon's
-    // half-width, and the solid digs penetration_mm into the terrain — which at
-    // any city scale is far more than the chord error across a ribbon a couple
-    // of millimetres wide. Uniform subdivision quadrupled every triangle to buy
-    // accuracy the penetration already covers.
-    maxEdge_m: Infinity,
+    // Vertices wherever the terrain has them. Without this the contour of a
+    // long straight road is two edges with almost nothing between them, so one
+    // triangle spans hundreds of metres of ground it never sampled and the
+    // terrain punches straight through the road.
+    maxEdge_m: terrainStep_m,
   };
 
   const solids: SolidMesh[] = [];
@@ -821,6 +820,10 @@ export function buildPolygonLayer(
   if (!settings?.enabled || features.length === 0) return { part: null, stats };
 
   const { heightfield, scale } = options;
+  // Draped surfaces have to carry vertices wherever the terrain does, or a
+  // large flat footprint spans ground it never sampled and the terrain pokes
+  // through it. See docs/08-pitfalls.md#undraped-features-let-terrain-through.
+  const terrainStep_m = Math.max(heightfield.spacingX_m, heightfield.spacingY_m);
   const minBottom_mm = Math.min(0.2, options.baseThickness_mm / 2);
   const drapeZ = (x_m: number, y_m: number) =>
     worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2];
@@ -878,7 +881,7 @@ export function buildPolygonLayer(
       height_mm,
       penetration_mm: Math.max(1.0, height_mm * 0.25),
       minBottom_mm,
-      maxEdge_m: Infinity,
+      maxEdge_m: terrainStep_m,
     });
     if (mesh.triangles > 0) {
       solids.push(mesh);
@@ -893,7 +896,7 @@ export function buildPolygonLayer(
       height_mm,
       penetration_mm: Math.max(1.0, height_mm * 0.5),
       minBottom_mm,
-      maxEdge_m: Infinity,
+      maxEdge_m: terrainStep_m,
     });
     if (mesh.triangles > 0) solids.push(mesh);
     stats.width_mm = height_mm;

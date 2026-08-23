@@ -61,9 +61,15 @@ const MIN_DEM_ZOOM = 6;
  * more than about 11 M triangles dies inside V8 with "Map maximum size
  * exceeded" — an engine error that tells the user nothing. This budget stops
  * well short of it and explains itself.
+ *
+ * Raised from 2 M once feature layers started following the terrain properly.
+ * Draping a dense city's roads at the terrain step costs roughly nine times
+ * what an undraped ribbon did — measured at 1.78 M for 6 009 road ways over
+ * 9.3 km — and 2 M would have truncated that mid-layer. The triangle-count
+ * warning still fires at 2 M, so the cost stays visible.
  * See docs/08-pitfalls.md#feature-triangle-explosion.
  */
-const FEATURE_TRIANGLE_BUDGET = 2_000_000;
+const FEATURE_TRIANGLE_BUDGET = 6_000_000;
 
 export async function assemble(
   request: GenerateRequest,

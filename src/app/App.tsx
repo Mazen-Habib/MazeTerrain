@@ -290,6 +290,11 @@ export function App() {
         (p) => setProgress(p),
       );
       setBundle(result);
+      if (import.meta.env.DEV) {
+        // Same dev-only escape hatch as the map handle: lets the mesh be
+        // inspected from the console without a separate build path.
+        (window as unknown as { __bundle?: MeshBundle }).__bundle = result;
+      }
       setDirty(false);
       setView('3d');
     } catch (err) {

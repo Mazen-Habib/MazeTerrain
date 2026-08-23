@@ -68,47 +68,74 @@ function edgeKey(a: number, b: number): number {
 }
 
 /**
- * Uniform 1-to-4 subdivision until every edge is short enough.
+ * Refine until no edge is longer than `maxEdge`, splitting ONLY the long edges.
  *
- * All triangles split at every level, so shared edges always receive the same
- * midpoint and the mesh stays conforming — no T-junctions, which would reopen
- * the very seams this module exists to close.
+ * The obvious version splits every triangle four ways per level. That is wrong
+ * for the shapes this module gets: a road ribbon is half a millimetre across
+ * and kilometres long, so its triangles have one enormous edge and two tiny
+ * ones. Quartering them refines the tiny edges as hard as the long one, and the
+ * count goes up 4x a level whatever the geometry needs — a single city's roads
+ * ran past V8's 16 777 216-entry Map limit and died inside validation.
+ *
+ * So this is red-green refinement: pick the edges that are actually too long,
+ * give each ONE midpoint shared by both triangles that use it, then re-cut each
+ * triangle according to how many of its edges were split — one, two or three.
+ * Sharing the midpoint is what keeps the mesh conforming; a T-junction here
+ * would reopen the very seams this module exists to close.
+ *
+ * Cost then follows length rather than area: a ribbon gains roughly
+ * length / maxEdge triangles instead of 4^levels.
  */
 function subdivide(xy: number[], tris: number[], maxEdge: number): number[] {
+  if (!Number.isFinite(maxEdge) || maxEdge <= 0) return tris;
+
   let current = tris;
+  const lengthOf = (a: number, b: number) =>
+    Math.hypot(xy[a * 2] - xy[b * 2], xy[a * 2 + 1] - xy[b * 2 + 1]);
 
   for (let level = 0; level < MAX_SUBDIVISION_LEVELS; level++) {
-    let longest = 0;
+    // One midpoint per over-long edge, created once and shared.
+    const midpoints = new Map<number, number>();
     for (let i = 0; i < current.length; i += 3) {
       for (let e = 0; e < 3; e++) {
         const a = current[i + e];
         const b = current[i + ((e + 1) % 3)];
-        const d = Math.hypot(xy[a * 2] - xy[b * 2], xy[a * 2 + 1] - xy[b * 2 + 1]);
-        if (d > longest) longest = d;
+        if (lengthOf(a, b) <= maxEdge) continue;
+        const key = edgeKey(a, b);
+        if (midpoints.has(key)) continue;
+        midpoints.set(key, xy.length / 2);
+        xy.push((xy[a * 2] + xy[b * 2]) / 2, (xy[a * 2 + 1] + xy[b * 2 + 1]) / 2);
       }
     }
-    if (longest <= maxEdge) break;
-
-    const midpoints = new Map<number, number>();
-    const midpoint = (a: number, b: number): number => {
-      const key = edgeKey(a, b);
-      const existing = midpoints.get(key);
-      if (existing !== undefined) return existing;
-      const index = xy.length / 2;
-      xy.push((xy[a * 2] + xy[b * 2]) / 2, (xy[a * 2 + 1] + xy[b * 2 + 1]) / 2);
-      midpoints.set(key, index);
-      return index;
-    };
+    if (midpoints.size === 0) break;
 
     const next: number[] = [];
     for (let i = 0; i < current.length; i += 3) {
       const a = current[i];
       const b = current[i + 1];
       const c = current[i + 2];
-      const ab = midpoint(a, b);
-      const bc = midpoint(b, c);
-      const ca = midpoint(c, a);
-      next.push(a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca);
+      const ab = midpoints.get(edgeKey(a, b));
+      const bc = midpoints.get(edgeKey(b, c));
+      const ca = midpoints.get(edgeKey(c, a));
+      const split = (ab !== undefined ? 1 : 0) + (bc !== undefined ? 1 : 0) + (ca !== undefined ? 1 : 0);
+
+      if (split === 0) {
+        next.push(a, b, c);
+      } else if (split === 3) {
+        next.push(a, ab!, ca!, ab!, b, bc!, ca!, bc!, c, ab!, bc!, ca!);
+      } else if (split === 1) {
+        // Green: one cut from the split edge to the opposite corner.
+        if (ab !== undefined) next.push(a, ab, c, ab, b, c);
+        else if (bc !== undefined) next.push(b, bc, a, bc, c, a);
+        else next.push(c, ca!, b, ca!, a, b);
+      } else {
+        // Two edges split. The boundary is now a pentagon, so fan it from the
+        // corner opposite the unsplit edge: three triangles, no midpoint ever
+        // used as if it were a corner.
+        if (ca === undefined) next.push(a, ab!, bc!, ab!, b, bc!, a, bc!, c);
+        else if (ab === undefined) next.push(b, bc!, ca!, bc!, c, ca!, b, ca!, a);
+        else next.push(c, ca!, ab!, ca!, a, ab!, c, ab!, b);
+      }
     }
     current = next;
   }
