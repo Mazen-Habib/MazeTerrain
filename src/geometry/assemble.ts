@@ -20,7 +20,7 @@ import { buildLineLayer, groupLines, waterRings } from './features';
 import { fetchOsm, OverpassError } from '../data/osm/overpass';
 import { normalise } from '../data/osm/normalise';
 import { LAYER_BY_ID, type LayerId } from '../data/osm/tags';
-import { selectionRingWorld, type SelectionShape } from './selection';
+import { bboxRingWorld, selectionRingWorld, type SelectionShape } from './selection';
 import type { Route } from '../data/gpx/types';
 import type {
   GenerateConfig,
@@ -248,6 +248,12 @@ export async function assemble(
     : null;
   const ringWorld = shape ? selectionRingWorld(shape, scale.origin) : null;
 
+  // Features and routes are always clipped, even without a shape. For a
+  // rectangle the bbox ring is exactly the terrain edge, so nothing legitimate
+  // is cut — but it is what stops tiled OSM fetches, which reach a whole tile
+  // beyond the selection, from building roads off the side of the model.
+  const featureClip = ringWorld ?? bboxRingWorld(config.bbox, scale.origin);
+
   const mesh = ringWorld
     ? buildClippedTerrainMesh(heightfield, scale, ringWorld)
     : buildTerrainMesh(heightfield, scale);
@@ -283,7 +289,7 @@ export async function assemble(
       const featureOptions = {
         heightfield,
         scale,
-        selection: ringWorld,
+        selection: featureClip,
         nozzleDiameter_mm: config.nozzleDiameter_mm,
         baseThickness_mm: config.baseThickness_mm,
         layers: config.layers,
@@ -429,7 +435,7 @@ export async function assemble(
       const built = buildRouteSolid(toRoute(record), {
         heightfield,
         scale,
-        selection: ringWorld,
+        selection: featureClip,
         nozzleDiameter_mm: config.nozzleDiameter_mm,
         baseThickness_mm: config.baseThickness_mm,
       });

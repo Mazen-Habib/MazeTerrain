@@ -73,6 +73,28 @@ export function selectionRingWorld(shape: SelectionShape, origin: EnuOrigin): Ri
   return selectionRingLonLat(shape).map(([lon, lat]) => projectENU(lon, lat, origin)) as Ring;
 }
 
+/**
+ * The bbox itself as a clip ring, in local ENU metres.
+ *
+ * A rectangle selection has no outline to clip against — the terrain is simply
+ * the whole grid — so features used to be bounded only by the Overpass query
+ * having asked for that exact bbox. Once large areas are fetched as
+ * grid-aligned tiles that stopped being true: tiles are deliberately not
+ * clipped to the selection, so features arrive from up to a tile beyond it and
+ * would be built hanging off the edge of the terrain.
+ *
+ * Corners are projected rather than derived from the extent, so this holds
+ * wherever the ENU origin sits.
+ */
+export function bboxRingWorld(bbox: BBox, origin: EnuOrigin): Ring {
+  return [
+    projectENU(bbox.west, bbox.south, origin),
+    projectENU(bbox.east, bbox.south, origin),
+    projectENU(bbox.east, bbox.north, origin),
+    projectENU(bbox.west, bbox.north, origin),
+  ] as Ring;
+}
+
 /** Padding applied by "Fit selection to routes" (F2). */
 export const FIT_PADDING = 0.15;
 

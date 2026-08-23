@@ -8,11 +8,22 @@ import {
   parseLength,
   ROAD_WIDTH_M,
 } from '../src/data/osm/tags';
-import { buildQuery, extractKey, fetchOsm, OverpassError } from '../src/data/osm/overpass';
+import {
+  bboxArea_km2,
+  buildQuery,
+  extractKey,
+  fetchOsm,
+  mergeResponses,
+  OverpassError,
+  tileBBox,
+} from '../src/data/osm/overpass';
 import { assembleRings, isClosed, normalise } from '../src/data/osm/normalise';
 import type { OverpassResponse } from '../src/data/osm/overpass';
 
 const BBOX = { west: 73.0, south: 33.6, east: 73.1, north: 33.7 };
+
+/** ~4 km2 — under the tiling threshold, so it stays a single exact-bbox query. */
+const SMALL_BBOX = { west: 73.0, south: 33.6, east: 73.02, north: 33.62 };
 
 describe('classify', () => {
   it('maps highway classes to roads with their world width', () => {
@@ -180,7 +191,7 @@ describe('fetchOsm', () => {
 
   it('posts the query and returns the elements', async () => {
     const fetchImpl = vi.fn(async () => ok({ elements: [{ type: 'way', id: 1 }] }));
-    const result = await fetchOsm(BBOX, ['roads'], {
+    const result = await fetchOsm(SMALL_BBOX, ['roads'], {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       backoffMs: 1,
     });
@@ -193,12 +204,15 @@ describe('fetchOsm', () => {
   it('retries a 429 and then reports it in words a user can act on', async () => {
     const fetchImpl = vi.fn(async () => ({ ok: false, status: 429 }) as unknown as Response);
     await expect(
-      fetchOsm(BBOX, ['roads'], { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 }),
+      fetchOsm(SMALL_BBOX, ['roads'], { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 }),
     ).rejects.toThrow(OverpassError);
 
     expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
     try {
-      await fetchOsm(BBOX, ['roads'], { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 });
+      await fetchOsm(SMALL_BBOX, ['roads'], {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        backoffMs: 1,
+      });
     } catch (err) {
       expect((err as OverpassError).userMessage).toMatch(/rate-limiting/i);
       expect((err as OverpassError).userMessage).toMatch(/reduce your selection/i);
@@ -212,9 +226,165 @@ describe('fetchOsm', () => {
       return { ok: false, status: 504 } as unknown as Response;
     });
     await expect(
-      fetchOsm(BBOX, ['roads'], { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 }),
+      fetchOsm(SMALL_BBOX, ['roads'], { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 }),
     ).rejects.toThrow();
     expect(new Set(seen).size).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * Large-area tiling.
+ *
+ * A single query for a 250 km2 city never returns, so anything past the
+ * threshold is split across a grid. The grid is aligned to whole multiples of
+ * the tile size and NOT clipped to the selection, which is what lets two
+ * overlapping selections share cache entries.
+ */
+describe('tileBBox', () => {
+  it('snaps to the grid and covers the whole bbox', () => {
+    const tiles = tileBBox({ west: 0.05, south: 0.05, east: 0.11, north: 0.09 }, 0.04);
+
+    for (const t of tiles) {
+      expect(t.west / 0.04).toBeCloseTo(Math.round(t.west / 0.04), 6);
+      expect(t.south / 0.04).toBeCloseTo(Math.round(t.south / 0.04), 6);
+    }
+    expect(Math.min(...tiles.map((t) => t.west))).toBeLessThanOrEqual(0.05);
+    expect(Math.max(...tiles.map((t) => t.east))).toBeGreaterThanOrEqual(0.11);
+    expect(Math.min(...tiles.map((t) => t.south))).toBeLessThanOrEqual(0.05);
+    expect(Math.max(...tiles.map((t) => t.north))).toBeGreaterThanOrEqual(0.09);
+  });
+
+  it('produces no duplicates and no gaps across a wide bbox', () => {
+    // Repeated addition of 0.04 drifts; indices must be rounded, not accumulated.
+    const tiles = tileBBox({ west: -1.3, south: 51.2, east: 0.7, north: 51.9 }, 0.04);
+    const keys = tiles.map((t) => `${t.west.toFixed(4)},${t.south.toFixed(4)}`);
+    expect(new Set(keys).size).toBe(tiles.length);
+
+    const cols = new Set(tiles.map((t) => t.west.toFixed(4))).size;
+    const rows = new Set(tiles.map((t) => t.south.toFixed(4))).size;
+    expect(cols * rows).toBe(tiles.length);
+  });
+
+  it('gives one tile for an area inside a single cell', () => {
+    expect(tileBBox({ west: 0.001, south: 0.001, east: 0.002, north: 0.002 }, 0.04)).toHaveLength(1);
+  });
+
+  it('keeps every tile under the single-query limit, at any latitude', () => {
+    // Default tile size, not an explicit one: this is the assertion that keeps
+    // TILE_DEG and MAX_SINGLE_QUERY_KM2 consistent with each other.
+    for (const lat of [0, 33.7, 51.5, 69.6]) {
+      const [tile] = tileBBox({ west: 0, south: lat, east: 0.001, north: lat + 0.001 });
+      expect(bboxArea_km2(tile)).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('keeps a 21 km city to a modest number of requests', () => {
+    // 35 requests for this selection is what got the client connect-refused.
+    // A selection is not grid-aligned, so it can straddle one extra row and
+    // column — 21.4 km spans 2.4 cells but can touch 4. Twelve, not nine.
+    const half = 21.4 / 2;
+    const bbox = {
+      west: 73.06 - half / (111.32 * Math.cos((33.7 * Math.PI) / 180)),
+      east: 73.06 + half / (111.32 * Math.cos((33.7 * Math.PI) / 180)),
+      south: 33.7 - half / 110.574,
+      north: 33.7 + half / 110.574,
+    };
+    expect(tileBBox(bbox).length).toBeLessThanOrEqual(16);
+  });
+});
+
+describe('mergeResponses', () => {
+  /**
+   * Overpass clips the selection, not the geometry, so a way along a tile edge
+   * comes back in full from both tiles. Building it twice stamps it twice.
+   */
+  it('drops elements returned by more than one tile', () => {
+    const merged = mergeResponses([
+      { elements: [{ type: 'way', id: 1 }, { type: 'way', id: 2 }] },
+      { elements: [{ type: 'way', id: 2 }, { type: 'way', id: 3 }] },
+    ]);
+    expect(merged.elements.map((e) => e.id)).toEqual([1, 2, 3]);
+  });
+
+  it('keeps a way and a relation that share an id', () => {
+    const merged = mergeResponses([
+      { elements: [{ type: 'way', id: 7 }, { type: 'relation', id: 7 }] },
+    ]);
+    expect(merged.elements).toHaveLength(2);
+  });
+
+  it('handles no responses at all', () => {
+    expect(mergeResponses([]).elements).toEqual([]);
+  });
+});
+
+describe('fetchOsm at scale', () => {
+  const ok = (body: unknown) =>
+    ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+
+  /** 0.5 x 0.5 degrees near the equator is ~3000 km2 — far past the threshold. */
+  const BIG = { west: 0, south: 0, east: 0.5, north: 0.5 };
+
+  it('splits a large area into several queries and merges them', async () => {
+    let n = 0;
+    const fetchImpl = vi.fn(async () => ok({ elements: [{ type: 'way', id: ++n }] }));
+
+    const result = await fetchOsm(BIG, ['roads'], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      backoffMs: 1,
+      tileGapMs: 0,
+    });
+
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+    expect(result.elements).toHaveLength(fetchImpl.mock.calls.length);
+  });
+
+  it('keeps a small area on a single exact-bbox query', async () => {
+    const fetchImpl = vi.fn(async () => ok({ elements: [] }));
+    await fetchOsm(SMALL_BBOX, ['roads'], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      backoffMs: 1,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports progress as areas completed, not as retries', async () => {
+    const messages: string[] = [];
+    const fetchImpl = vi.fn(async () => ok({ elements: [] }));
+
+    await fetchOsm(BIG, ['roads'], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      backoffMs: 1,
+      tileGapMs: 0,
+      onAttempt: (m) => messages.push(m),
+    });
+
+    expect(messages.length).toBeGreaterThan(1);
+    expect(messages.every((m) => /area \d+ of \d+/.test(m))).toBe(true);
+  });
+
+  /**
+   * A road network missing a rectangular chunk reads as a geometry bug. An
+   * honest failure, with the terrain still built, is the better outcome.
+   */
+  it('fails the whole fetch when one area cannot be loaded', async () => {
+    // Keyed on the tile's own bbox, so this tile fails on every retry too —
+    // a mock that fails by call count would be rescued by the next attempt.
+    const doomed = '0.080000';
+    const fetchImpl = vi.fn(async (_url: unknown, init: unknown) => {
+      const body = String((init as { body?: unknown }).body ?? '');
+      return body.includes(doomed)
+        ? ({ ok: false, status: 500 } as unknown as Response)
+        : ok({ elements: [] });
+    });
+
+    await expect(
+      fetchOsm(BIG, ['roads'], {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        backoffMs: 1,
+        tileGapMs: 0,
+      }),
+    ).rejects.toThrow(OverpassError);
   });
 });
 
