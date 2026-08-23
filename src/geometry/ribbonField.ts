@@ -406,6 +406,23 @@ export interface RibbonFieldStats {
   coarsened: boolean;
 }
 
+export interface RibbonFieldOptions {
+  /**
+   * Trace the contour this far inside the full width.
+   *
+   * For the inlay insert. The channel and the piece that seats in it must come
+   * from ONE field: a distance field's level sets are exact offset curves, so
+   * tracing the same field at two levels gives a true, uniform clearance.
+   */
+  inset_m?: number;
+  /**
+   * Refine the grid as though an inset of this size were being traced, without
+   * actually insetting. The channel passes its clearance here so that it lands
+   * on the same grid as the insert that has to fit it.
+   */
+  resolve_m?: number;
+}
+
 export interface RibbonFieldResult {
   polygons: MultiPolygon;
   stats: RibbonFieldStats;
@@ -432,7 +449,10 @@ export function buildRibbonField(
   width_m: number,
   selection: Ring | null = null,
   cellsPerHalfWidth: number = CELLS_PER_HALF_WIDTH,
+  options: RibbonFieldOptions = {},
 ): RibbonFieldResult {
+  const inset_m = options.inset_m ?? 0;
+  const clearance_m = Math.max(inset_m, options.resolve_m ?? 0);
   const empty: RibbonFieldResult = {
     polygons: [],
     stats: { cell_m: 0, gridCells: 0, rings: 0, coarsened: false },
@@ -448,6 +468,18 @@ export function buildRibbonField(
 
   const halfWidth = width_m / 2;
   let cell = halfWidth / Math.max(1, cellsPerHalfWidth);
+
+  // An inset contour can only be as accurate as the grid it is traced on. Two
+  // level sets a clearance apart land in the SAME cells when the clearance is
+  // smaller than a cell, and then interpolation can put the inner one outside
+  // the outer one — the insert pokes through the channel wall. Resolve the
+  // clearance with at least two cells across it.
+  //
+  // `resolve_m` exists so the OUTER contour can be refined to the same grid
+  // even though it is not itself inset. Both curves have to come off one grid;
+  // a fine inner contour compared against a coarse outer one is the same bug
+  // in a different disguise, because the coarse one cuts every corner.
+  if (clearance_m > 0) cell = Math.min(cell, clearance_m / 2);
   let coarsened = false;
 
   // Guard the grid size the same way the terrain grid is guarded.
@@ -473,7 +505,15 @@ export function buildRibbonField(
   }
 
   const field = distanceField(usable, halfWidth, cell, selection);
-  const segments = marchingSquares(field, halfWidth);
+  // Trace the contour at halfWidth - inset. Because this is a distance field,
+  // its level sets ARE offset curves: the inset contour is exactly `inset`
+  // metres inside the full-width one, everywhere, including where the ribbon
+  // folds back on itself. Rasterising a narrower ribbon separately does not
+  // give that — it lands on a different grid and the gap collapses to nothing
+  // wherever the route nearly touches itself.
+  // See docs/08-pitfalls.md#clearance-from-a-second-rasterisation.
+  const iso = Math.max(cell * 0.5, halfWidth - Math.max(0, inset_m));
+  const segments = marchingSquares(field, iso);
   const minArea = MIN_RING_AREA_CELLS * cell * cell;
   const rings = chainRings(segments, cell)
     .map((ring) => cleanRing(ring, cell))

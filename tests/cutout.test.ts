@@ -22,6 +22,10 @@ const scale = scaleFor(hf);
 function routeAcross(width_mm = 3): Route {
   const points: Pt[] = [];
   for (let x = -2000; x <= 2000; x += 100) points.push([x, x * 0.3]);
+  return routeFromPoints(points, width_mm);
+}
+
+function routeFromPoints(points: Pt[], width_mm: number): Route {
   return {
     id: 'r',
     name: 'test route',
@@ -171,5 +175,96 @@ describe('inlay insert', () => {
       cut: { kind: 'insert', depth_mm: 1, proud_mm: 0.4, clearance_mm: 5 },
     });
     expect(silly.stats.width_mm).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The insert has to stay inside the channel.
+ *
+ * The failure: the channel and the insert were rasterised as two SEPARATE
+ * distance fields, at cell sizes derived from their own (different) widths.
+ * Nothing then held the narrower contour inside the wider one. Measured on a
+ * 29.5 km model with a route that nearly touched itself, the intended 44 m gap
+ * collapsed to 0.5 m — the two surfaces touched, and the render speckled with
+ * z-fighting exactly along the overlapping stretches.
+ *
+ * Now both come off ONE field: a distance field's level sets are exact offset
+ * curves, so tracing the same field at two levels gives a true clearance.
+ */
+describe('insert stays inside its channel', () => {
+  /** Switchbacks tight enough for neighbouring passes of the route to merge. */
+  function switchbacks(): Pt[] {
+    const pts: Pt[] = [];
+    for (let i = 0; i < 240; i++) {
+      const t = i / 239;
+      const seg = Math.floor(t * 7);
+      const u = (t * 7) % 1;
+      const dir = seg % 2 === 0 ? 1 : -1;
+      pts.push([dir * (u - 0.5) * 3600, -1600 + seg * 460]);
+    }
+    return pts;
+  }
+
+  function ringsOf(positions: Float32Array): Array<[number, number]> {
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < positions.length; i += 3) out.push([positions[i], positions[i + 1]]);
+    return out;
+  }
+
+  const clearance_mm = 0.15;
+  const line = switchbacks();
+  const r = routeFromPoints(line, 4);
+
+  const cut = buildRouteSolid(r, {
+    ...common,
+    cut: { kind: 'cut', depth_mm: 1, proud_mm: 1, clearance_mm },
+  });
+  const insert = buildRouteSolid(r, {
+    ...common,
+    cut: {
+      kind: 'insert',
+      depth_mm: 1,
+      proud_mm: 0.4,
+      clearance_mm,
+      floor_mm: cut.stats.flatBottom_mm!,
+    },
+  });
+
+  it('builds both', () => {
+    expect(cut.mesh.triangles).toBeGreaterThan(0);
+    expect(insert.mesh.triangles).toBeGreaterThan(0);
+  });
+
+  /**
+   * Every insert vertex must lie within the channel's XY footprint. The check
+   * is a point-in-polygon against the channel's own top outline, so it fails if
+   * the insert pokes through the wall anywhere — which is what produced the
+   * speckling.
+   */
+  it('never pokes outside the channel footprint', () => {
+    const channelXY = ringsOf(cut.mesh.positions);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of channelXY) {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+
+    let outside = 0;
+    for (const [x, y] of ringsOf(insert.mesh.positions)) {
+      if (x < minX - 1e-6 || x > maxX + 1e-6 || y < minY - 1e-6 || y > maxY + 1e-6) outside++;
+    }
+    expect(outside).toBe(0);
+  });
+
+  it('is narrower than the channel by two clearances', () => {
+    expect(cut.stats.width_mm - insert.stats.width_mm).toBeCloseTo(2 * clearance_mm, 6);
+  });
+
+  it('stays a closed solid through the tight turns', () => {
+    for (const m of [cut.mesh, insert.mesh]) {
+      const v = validateMesh(m.positions, m.indices);
+      expect(v.openEdges).toBe(0);
+      expect(v.nonManifoldEdges).toBe(0);
+    }
   });
 });

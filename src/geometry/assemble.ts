@@ -497,6 +497,11 @@ export async function assemble(
           cut: {
             kind: 'cut' as const,
             depth_mm: config.cutout.insetDepth_mm,
+            // Passed even though the channel is not inset: it makes the channel
+            // resolve on the same grid as the insert that must fit it.
+            ...(config.cutout.subMode === 'inlay'
+              ? { clearance_mm: config.cutout.clearance_mm }
+              : {}),
             // Generous: the tool only has to clear the local surface, and a
             // channel that fails to break through is worse than a tall tool.
             proud_mm: Math.max(1, config.cutout.insetDepth_mm),

@@ -172,14 +172,20 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
   const widthClamped = style.width_mm < minWidth_mm;
   let width_mm = widthClamped ? minWidth_mm : style.width_mm;
 
-  // The insert is the same ribbon, narrower. Shrinking the width is exactly the
-  // "shrink by clearance on the XY normals" the spec asks for, because the
-  // ribbon comes from a distance field — a narrower field IS the inward offset,
-  // with none of the self-intersection an explicit polygon offset invites.
-  if (options.cut?.kind === 'insert') {
-    width_mm = Math.max(0.01, width_mm - 2 * (options.cut.clearance_mm ?? 0));
-  }
   const width_m = width_mm / scale.scale;
+
+  // The insert is the same ribbon, inset. Note it is the CONTOUR that moves,
+  // not the width: the field is built at the channel's width and traced at a
+  // lower level, so the two curves are exact offsets of each other. Building a
+  // narrower ribbon instead put it on a different grid, and where a route
+  // switchbacked the intended gap collapsed from 44 m to half a metre — the
+  // insert and the channel wall then touched, which is what the speckling
+  // along overlapping stretches was.
+  const inset_m =
+    options.cut?.kind === 'insert' ? (options.cut.clearance_mm ?? 0) / scale.scale : 0;
+  if (inset_m > 0) {
+    width_mm = Math.max(0.01, width_mm - 2 * (options.cut?.clearance_mm ?? 0));
+  }
 
   const emptyStats: RouteBuildStats = {
     rawPoints: route.points.length,
@@ -202,7 +208,14 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
   //    every other layer. The level set is self-intersection-free by
   //    construction — see ribbonField.ts for why the specced boolean union is
   //    not usable here.
-  const ribbon = buildRibbonField(centreline, width_m, selection);
+  // width_m is the CHANNEL's width in every case; the insert differs only by
+  // the level its contour is traced at.
+  const ribbon = buildRibbonField(centreline, width_m, selection, undefined, {
+    inset_m,
+    // The channel refines to the insert's grid even though it is not inset, so
+    // the two contours are traced off one field and the gap is real.
+    resolve_m: options.cut?.clearance_mm ? options.cut.clearance_mm / scale.scale : 0,
+  });
   const footprint: MultiPolygon = ribbon.polygons;
   if (footprint.length === 0 || multiPolygonArea(footprint) <= 0) {
     return { mesh: { positions: new Float32Array(0), indices: new Uint32Array(0), triangles: 0 }, stats: emptyStats };
