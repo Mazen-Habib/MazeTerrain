@@ -16,7 +16,13 @@ import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
 import { repairAndValidate, validateMesh } from './validate';
 import { buildRouteSolid } from './route';
-import { buildLineLayer, groupLines, waterRings } from './features';
+import {
+  buildLineLayer,
+  buildPolygonLayer,
+  groupLines,
+  groupPolygons,
+  waterRings,
+} from './features';
 import { fetchOsm, OverpassError } from '../data/osm/overpass';
 import { normalise } from '../data/osm/normalise';
 import { LAYER_BY_ID, type LayerId } from '../data/osm/tags';
@@ -279,13 +285,15 @@ export async function assemble(
       report({
         stage: 'building-features',
         percent: OSM_END,
-        detail: `Building ${features.lines.length} map features`,
+        detail:
+          `Building ${features.lines.length + features.polygons.length} map features`,
       });
 
       // Water footprints are needed even when the water layer is off, because a
       // road running through a river has to be deleted either way.
       const water = waterRings(features.polygons, scale);
       const grouped = groupLines(features.lines);
+      const groupedPolygons = groupPolygons(features.polygons);
       const featureOptions = {
         heightfield,
         scale,
@@ -299,26 +307,33 @@ export async function assemble(
 
       let done = 0;
       for (const layer of enabledLayers) {
-        const lines = grouped.get(layer);
-        if (!lines || lines.length === 0) {
+        const isLine = LAYER_BY_ID[layer].kind === 'line';
+        const lines = grouped.get(layer) ?? [];
+        const polygons = groupedPolygons.get(layer) ?? [];
+        const count = isLine ? lines.length : polygons.length;
+
+        if (count === 0) {
           // Naming the empty layer beats printing nothing and saying nothing
           // (docs/08-pitfalls.md#sparse-osm-data).
-          if (LAYER_BY_ID[layer].kind === 'line') {
-            warnings.push({
-              level: 'warn',
-              code: 'layer-empty',
-              message: `No ${LAYER_BY_ID[layer].label.toLowerCase()} found in this area.`,
-            });
-          }
+          warnings.push({
+            level: 'warn',
+            code: 'layer-empty',
+            message: `No ${LAYER_BY_ID[layer].label.toLowerCase()} found in this area.`,
+          });
           done++;
           continue;
         }
 
         const remaining = Math.max(0, FEATURE_TRIANGLE_BUDGET - featureTriangles);
-        const built = buildLineLayer(layer, lines, water, {
-          ...featureOptions,
-          triangleBudget: remaining,
-        });
+        const built = isLine
+          ? buildLineLayer(layer, lines, water, {
+              ...featureOptions,
+              triangleBudget: remaining,
+            })
+          : buildPolygonLayer(layer, polygons, {
+              ...featureOptions,
+              triangleBudget: remaining,
+            });
         if (built.part) featureParts.push(built.part);
         featureTriangles += built.stats.triangles;
         layerSummaries.push({

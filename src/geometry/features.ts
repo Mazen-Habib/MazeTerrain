@@ -16,13 +16,14 @@
  * A road diving under a river is the classic artefact.
  */
 import type { LineFeature, PolygonFeature } from '../data/osm/normalise';
-import { LAYER_BY_ID, type LayerId } from '../data/osm/tags';
+import { DEFAULT_BUILDING_HEIGHT_M, LAYER_BY_ID, type LayerId } from '../data/osm/tags';
 import type { Pt } from '../data/gpx/simplify';
 import { resample, simplifyPoints, toleranceForScale } from '../data/gpx/simplify';
 import { projectENU, worldToPrint, type ResolvedScale } from './coords';
 import { extrudeDraped, type SolidMesh } from './extrude';
 import { sampleHeightfieldAt, type Heightfield } from './heightfield';
-import type { MultiPolygon, Ring } from './polygons';
+import { clipPolygonToRing, convexPieces } from './clip';
+import type { MultiPolygon, Polygon, Ring } from './polygons';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
 import { pointInRing } from './route';
 import type { MeshPart } from './types';
@@ -777,6 +778,151 @@ export function groupLines(lines: LineFeature[]): Map<LayerId, LineFeature[]> {
     const list = grouped.get(line.layer);
     if (list) list.push(line);
     else grouped.set(line.layer, [line]);
+  }
+  return grouped;
+}
+
+
+/**
+ * Build one MeshPart for a whole polygon layer.
+ *
+ * Water areas, greenery, sand and buildings all reduce to the same thing: a
+ * footprint clipped to the selection and handed to the shared draped extruder.
+ * They differ only in how tall they stand.
+ *
+ * Buildings are the exception that earns its own branch. Every other polygon
+ * layer is a flat sheet at one height, so the whole layer is one extrusion.
+ * Buildings each have their own height from the OSM tag cascade, so they are
+ * extruded per feature and merged — the same many-solids-in-one-part shape the
+ * line layers already produce, and for the same reason: welding a merged solid
+ * fuses the ones that touch (docs/08-pitfalls.md#weld-fuses-merged-solids).
+ */
+export function buildPolygonLayer(
+  layer: LayerId,
+  features: PolygonFeature[],
+  options: BuildFeaturesOptions,
+): LineLayerResult {
+  const settings = options.layers[layer];
+  const stats: FeatureBuildStats = {
+    layer,
+    features: 0,
+    triangles: 0,
+    truncated: false,
+    drownedSegments: 0,
+    widthClamped: false,
+    width_mm: 0,
+    narrowestWidth_mm: 0,
+    droppedSubtypes: [],
+    crowdedSubtypes: [],
+    coverage: 0,
+    suggestedMinWidth_mm: 0,
+  };
+
+  if (!settings?.enabled || features.length === 0) return { part: null, stats };
+
+  const { heightfield, scale } = options;
+  const minBottom_mm = Math.min(0.2, options.baseThickness_mm / 2);
+  const drapeZ = (x_m: number, y_m: number) =>
+    worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2];
+  const toPrintXY = (x_m: number, y_m: number): [number, number] => [
+    x_m * scale.scale,
+    y_m * scale.scale,
+  ];
+
+  // Decomposed once, not once per feature: a freehand outline can be hundreds
+  // of vertices and ear-clipping it for every building would dominate the build.
+  const clipPieces = options.selection ? convexPieces(options.selection) : null;
+
+  const clip = (rings: Ring[]): Polygon[] => {
+    if (!options.selection || !clipPieces) return [rings];
+    return clipPolygonToRing(rings, options.selection, clipPieces);
+  };
+
+  const isBuildings = layer === 'buildings';
+  const solids: SolidMesh[] = [];
+  const sheet: MultiPolygon = [];
+  let spent = 0;
+
+  for (const feature of features) {
+    if (settings.subtypes.length > 0 && !settings.subtypes.includes(feature.subtype)) continue;
+
+    const rings = feature.rings
+      .map((ring) => projectLine(ring, scale))
+      .filter((ring) => ring.length >= 3);
+    if (rings.length === 0) continue;
+
+    const clipped = clip(rings as Ring[]);
+    if (clipped.length === 0) continue;
+    stats.features++;
+
+    if (!isBuildings) {
+      sheet.push(...clipped);
+      continue;
+    }
+
+    // A building's height comes from the tag cascade, and `min_height` lifts
+    // the bottom for the upper part of a stepped building — but the bottom
+    // still has to reach the terrain, or the solid floats.
+    const real_m = feature.height_m ?? DEFAULT_BUILDING_HEIGHT_M;
+    const height_mm = Math.max(
+      0.1,
+      real_m * scale.zScale * settings.heightScale,
+    );
+
+    if (spent >= options.triangleBudget) {
+      stats.truncated = true;
+      break;
+    }
+
+    const mesh = extrudeDraped(clipped, drapeZ, toPrintXY, {
+      height_mm,
+      penetration_mm: Math.max(1.0, height_mm * 0.25),
+      minBottom_mm,
+      maxEdge_m: Infinity,
+    });
+    if (mesh.triangles > 0) {
+      solids.push(mesh);
+      spent += mesh.triangles;
+      stats.width_mm = Math.max(stats.width_mm, height_mm);
+    }
+  }
+
+  if (!isBuildings && sheet.length > 0) {
+    const height_mm = Math.max(0.1, settings.height_mm * settings.heightScale);
+    const mesh = extrudeDraped(sheet, drapeZ, toPrintXY, {
+      height_mm,
+      penetration_mm: Math.max(1.0, height_mm * 0.5),
+      minBottom_mm,
+      maxEdge_m: Infinity,
+    });
+    if (mesh.triangles > 0) solids.push(mesh);
+    stats.width_mm = height_mm;
+  }
+
+  if (solids.length === 0) return { part: null, stats };
+
+  const merged = mergeSolids(solids);
+  stats.triangles = merged.triangles;
+
+  return {
+    part: {
+      name: layer,
+      color: settings.color,
+      positions: merged.positions,
+      indices: merged.indices,
+      manifold: true,
+    },
+    stats,
+  };
+}
+
+/** Group normalised polygons by layer, so each layer builds once. */
+export function groupPolygons(polygons: PolygonFeature[]): Map<LayerId, PolygonFeature[]> {
+  const grouped = new Map<LayerId, PolygonFeature[]>();
+  for (const polygon of polygons) {
+    const list = grouped.get(polygon.layer);
+    if (list) list.push(polygon);
+    else grouped.set(polygon.layer, [polygon]);
   }
   return grouped;
 }

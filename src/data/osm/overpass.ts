@@ -19,8 +19,19 @@ export const OVERPASS_ENDPOINTS = [
 ];
 
 const TIMEOUT_S = 60;
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 4;
 const BASE_BACKOFF_MS = 1500;
+
+/**
+ * How long to wait after an explicit rate-limit response.
+ *
+ * Separate from the generic backoff, and much longer, because a 429 means
+ * something different from a transient failure: the public instance runs a
+ * small pool of slots per client and frees them on a timer measured in tens of
+ * seconds. Retrying a rate limit after 1.5 s just spends another attempt.
+ * Measured: a 12-tile fetch got through 7 tiles before the pool ran dry.
+ */
+const RATE_LIMIT_BACKOFF_MS = 8000;
 
 /**
  * Area above which one query is split into several.
@@ -67,7 +78,7 @@ const TILE_DEG = 0.08;
  * per selection and is the difference between working and being blocked.
  */
 const TILE_CONCURRENCY = 1;
-const TILE_GAP_MS = 700;
+const TILE_GAP_MS = 1500;
 
 /** docs/03-architecture.md caching table: OSM responses for 7 days. */
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -231,6 +242,8 @@ export interface FetchOsmOptions {
   backoffMs?: number;
   /** Injected in tests so the suite does not sit through the politeness gap. */
   tileGapMs?: number;
+  /** Injected in tests so the suite does not sit through a rate-limit wait. */
+  rateLimitBackoffMs?: number;
 }
 
 /**
@@ -274,12 +287,14 @@ async function fetchOne(
         if (attempt === MAX_ATTEMPTS - 1) {
           throw new OverpassError(
             `Overpass returned HTTP ${res.status}`,
-            `OpenStreetMap is rate-limiting requests (HTTP ${res.status}). Wait 30 seconds ` +
-              `and try again, or reduce your selection area.`,
+            `OpenStreetMap is rate-limiting requests (HTTP ${res.status}). Wait a minute ` +
+              `and press Generate again — the areas that already loaded are cached, so it ` +
+              `picks up where it stopped rather than starting over.`,
             res.status,
           );
         }
-        await sleep(backoff * Math.pow(2, attempt), options.signal);
+        const rateLimitBackoff = options.rateLimitBackoffMs ?? RATE_LIMIT_BACKOFF_MS;
+        await sleep(rateLimitBackoff * Math.pow(2, attempt), options.signal);
         continue;
       }
 

@@ -44,7 +44,7 @@ const GLYPH: Record<LayerId, string> = {
 };
 
 /** Layers whose geometry is not built yet, so the toggle cannot mislead. */
-const NOT_YET_BUILT = new Set<LayerId>(['water', 'buildings', 'greenery', 'sand']);
+const NOT_YET_BUILT = new Set<LayerId>([]);
 
 export function LayersPanel({
   layers,

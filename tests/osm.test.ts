@@ -204,7 +204,11 @@ describe('fetchOsm', () => {
   it('retries a 429 and then reports it in words a user can act on', async () => {
     const fetchImpl = vi.fn(async () => ({ ok: false, status: 429 }) as unknown as Response);
     await expect(
-      fetchOsm(SMALL_BBOX, ['roads'], { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 }),
+      fetchOsm(SMALL_BBOX, ['roads'], {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        backoffMs: 1,
+        rateLimitBackoffMs: 1,
+      }),
     ).rejects.toThrow(OverpassError);
 
     expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
@@ -212,10 +216,13 @@ describe('fetchOsm', () => {
       await fetchOsm(SMALL_BBOX, ['roads'], {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         backoffMs: 1,
+        rateLimitBackoffMs: 1,
       });
     } catch (err) {
       expect((err as OverpassError).userMessage).toMatch(/rate-limiting/i);
-      expect((err as OverpassError).userMessage).toMatch(/reduce your selection/i);
+      // The message has to say the work so far is not lost, because with tiling
+      // it genuinely is not: every completed area is already cached.
+      expect((err as OverpassError).userMessage).toMatch(/cached/i);
     }
   });
 
@@ -226,7 +233,11 @@ describe('fetchOsm', () => {
       return { ok: false, status: 504 } as unknown as Response;
     });
     await expect(
-      fetchOsm(SMALL_BBOX, ['roads'], { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 }),
+      fetchOsm(SMALL_BBOX, ['roads'], {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        backoffMs: 1,
+        rateLimitBackoffMs: 1,
+      }),
     ).rejects.toThrow();
     expect(new Set(seen).size).toBeGreaterThan(1);
   });
