@@ -100,7 +100,14 @@ function slugify(name: string): string {
 }
 
 export function App() {
-  const [shape, setShape] = useState<SelectionShape>(() => ({
+  /**
+   * The selection, or null when there is none.
+   *
+   * Nullable on purpose. Clearing a selection has to actually leave the app
+   * with nothing selected — resetting to some default shape would just be a
+   * differently-placed box the user then has to remove again.
+   */
+  const [shape, setShape] = useState<SelectionShape | null>(() => ({
     kind: 'rectangle',
     bbox: PRESETS[0].bbox,
   }));
@@ -140,7 +147,10 @@ export function App() {
   const builtSlug = useRef('model');
 
   const config: GenerateConfig = useMemo(
-    () => ({ ...settings, bbox: selectionBBox(shape) }),
+    // With no selection there is nothing to size the model to. The bbox falls
+    // back so the rest of the config stays a valid object; Generate is disabled
+    // in that state, so the value is never built from.
+    () => ({ ...settings, bbox: shape ? selectionBBox(shape) : PRESETS[0].bbox }),
     [settings, shape],
   );
 
@@ -158,6 +168,22 @@ export function App() {
     },
     [],
   );
+
+  /**
+   * Remove the selection.
+   *
+   * The feature preview belongs to the selection it was fetched for, so it goes
+   * too — leaving roads highlighted for an area that is no longer selected
+   * would be worse than showing nothing.
+   */
+  const clearShape = useCallback(() => {
+    setShape(null);
+    setTool(null);
+    setPreviewLines(null);
+    setPreviewBBox(null);
+    setPreviewError(null);
+    setDirty(true);
+  }, []);
 
   const onPreset = useCallback(
     (id: string) => {
@@ -233,11 +259,15 @@ export function App() {
   }, [config]);
 
   const area_km2 = useMemo(
-    () => selectionArea_km2(shape, bboxCentre(selectionBBox(shape))),
+    () => (shape ? selectionArea_km2(shape, bboxCentre(selectionBBox(shape))) : 0),
     [shape],
   );
 
   const onGenerate = useCallback(async () => {
+    if (!shape) {
+      setError('Draw an area on the map first — there is nothing to generate.');
+      return;
+    }
     setError(null);
     setProgress({ stage: 'resolving', percent: 0, detail: 'Starting' });
     builtSlug.current = slugify(routes.length > 0 ? routes[0].name : areaLabel);
@@ -245,7 +275,7 @@ export function App() {
     try {
       // A rectangle IS its bounding box, so it needs no clipping pass. Anything
       // else has to be clipped or the model exports as the bbox rectangle.
-      const ring = shape.kind === 'rectangle' ? null : selectionRingLonLat(shape);
+      const ring = !shape || shape.kind === 'rectangle' ? null : selectionRingLonLat(shape);
       const result = await generate(
         { config, routes: toSerialisable(routes), selectionRing: ring },
         (p) => setProgress(p),
@@ -277,6 +307,10 @@ export function App() {
    * work (CLAUDE.md, Performance).
    */
   const onPreviewFeatures = useCallback(async () => {
+    if (!shape) {
+      setPreviewError('Draw an area on the map first.');
+      return;
+    }
     const layers = enabledLineLayers(config);
     if (layers.length === 0) {
       setPreviewError('No line layers are switched on.');
@@ -298,7 +332,7 @@ export function App() {
     } finally {
       setPreviewBusy(false);
     }
-  }, [config]);
+  }, [config, shape]);
 
   // The preview belongs to the selection it was fetched for. Moving the
   // selection must clear it rather than leave roads highlighted somewhere else.
@@ -388,7 +422,12 @@ export function App() {
 
         <div className="topbar__actions">
           {bundle && !dirty ? <span className="badge badge--ok">Up to date</span> : null}
-          <button className={`btn${dirty ? ' btn--accent' : ''}`} onClick={onGenerate} disabled={busy}>
+          <button
+            className={`btn${dirty && shape ? ' btn--accent' : ''}`}
+            onClick={onGenerate}
+            disabled={busy || !shape}
+            title={shape ? undefined : 'Draw an area on the map first'}
+          >
             {busy ? 'Generating…' : 'Generate'}
           </button>
           <button
@@ -680,6 +719,14 @@ export function App() {
               <button className="shapetool" onClick={() => fitToRoutes(routes)} disabled={routes.length === 0}>
                 <span aria-hidden>⤢</span> Fit to routes
               </button>
+              <button
+                className="shapetool shapetool--danger"
+                onClick={clearShape}
+                disabled={!shape}
+                title="Remove the selected area"
+              >
+                <span aria-hidden>✕</span> Clear area
+              </button>
             </div>
 
             {tool ? (
@@ -691,8 +738,10 @@ export function App() {
             ) : null}
 
             <div className="statusstrip">
-              {cursor ? `${cursor[1].toFixed(4)}, ${cursor[0].toFixed(4)}` : '—'} · area:{' '}
-              {area_km2.toFixed(2)} km² · {shape.kind}
+              {cursor ? `${cursor[1].toFixed(4)}, ${cursor[0].toFixed(4)}` : '—'} ·{' '}
+              {shape
+                ? `area: ${area_km2.toFixed(2)} km² · ${shape.kind}`
+                : 'no area selected — draw one to generate'}
             </div>
           </div>
 

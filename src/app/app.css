@@ -532,6 +532,15 @@ body {
   color: var(--text) !important;
 }
 
+/* Clear is destructive, so it reads differently from the drawing tools. */
+.shapetool--danger:not(:disabled) {
+  color: var(--bad);
+}
+
+.shapetool--danger:not(:disabled):hover {
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
+}
+
 .shapetools,
 .shadingtools {
   position: absolute;
