@@ -17,6 +17,7 @@ import { defaultConfig, PRESETS } from '../config/presets';
 import { GpxParseError, parseGpxText } from '../data/gpx/parse';
 import type { Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
+import { writeThreeMF, threeMFFilename } from '../export/threemf';
 import { bboxCentre, resolveGrid } from '../geometry/coords';
 import {
   fitSelectionToRoutes,
@@ -322,18 +323,39 @@ export function App() {
 
   const blocked = bundle ? bundle.warnings.some((w) => w.level === 'fail') : true;
 
-  const onDownload = useCallback(() => {
-    if (!bundle || blocked) return;
-    const blob = new Blob([writeBinarySTL(bundle.parts, stlHeader())], { type: 'model/stl' });
-    const url = URL.createObjectURL(blob);
+  const save = useCallback((data: ArrayBuffer, filename: string, type: string) => {
+    const url = URL.createObjectURL(new Blob([data], { type }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = stlFilename(builtSlug.current, config.modelWidth_mm);
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }, [bundle, blocked, config.modelWidth_mm]);
+  }, []);
+
+  const onDownload = useCallback(() => {
+    if (!bundle || blocked) return;
+    save(
+      writeBinarySTL(bundle.parts, stlHeader()),
+      stlFilename(builtSlug.current, config.modelWidth_mm),
+      'model/stl',
+    );
+  }, [bundle, blocked, config.modelWidth_mm, save]);
+
+  /**
+   * 3MF keeps each layer as its own object with its own material, so a slicer
+   * opens the model with filaments already assigned. STL cannot: it has no
+   * concept of parts, so a multicolour model exported as STL is one grey blob.
+   */
+  const onDownload3mf = useCallback(() => {
+    if (!bundle || blocked) return;
+    save(
+      writeThreeMF(bundle.parts),
+      threeMFFilename(builtSlug.current, config.modelWidth_mm),
+      'model/3mf',
+    );
+  }, [bundle, blocked, config.modelWidth_mm, save]);
 
   const dataset = DEM_DATASETS[config.dataset];
 
@@ -368,6 +390,14 @@ export function App() {
           {bundle && !dirty ? <span className="badge badge--ok">Up to date</span> : null}
           <button className={`btn${dirty ? ' btn--accent' : ''}`} onClick={onGenerate} disabled={busy}>
             {busy ? 'Generating…' : 'Generate'}
+          </button>
+          <button
+            className="btn"
+            onClick={onDownload3mf}
+            disabled={!bundle || blocked || busy}
+            title="Every layer as its own object and material — colours survive into the slicer"
+          >
+            Download 3MF
           </button>
           <button className="btn" onClick={onDownload} disabled={!bundle || blocked || busy}>
             Download STL
