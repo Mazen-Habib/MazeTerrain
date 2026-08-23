@@ -279,3 +279,86 @@ export function repairAndValidate(
     removed: 0,
   };
 }
+
+
+/**
+ * Feature geometry that floats far above the ground it drapes on.
+ *
+ * A draped solid should sit within its own height of the terrain. When one does
+ * not, it reads on screen as a sharp cone or blade standing out of the model,
+ * and it prints as one — but nothing else catches it, because the mesh is
+ * perfectly watertight and manifold either way. That is what made the
+ * undraped-feature bug so hard to see
+ * (docs/08-pitfalls.md#undraped-features-let-terrain-through): every existing
+ * check passed while the model was visibly wrong.
+ *
+ * Terrain heights are read from a coarse bin rather than interpolated. That is
+ * deliberate — it makes the check cheap enough to run on every build, and a bin
+ * only ever reports the HIGHEST ground nearby, so it under-reports rather than
+ * inventing spikes.
+ */
+export interface FloatingCheck {
+  /** Vertices standing further above the terrain than they should. */
+  count: number;
+  /** The worst offender's height above the ground beneath it, print mm. */
+  worst_mm: number;
+  /** Where it is, in print millimetres, for a bug report that can be acted on. */
+  at: [number, number] | null;
+}
+
+export function findFloatingVertices(
+  terrain: Float32Array,
+  featurePositions: Float32Array,
+  allowed_mm: number,
+  bin_mm = 0.4,
+): FloatingCheck {
+  if (terrain.length === 0 || featurePositions.length === 0) {
+    return { count: 0, worst_mm: 0, at: null };
+  }
+
+  const ground = new Map<number, number>();
+  const key = (x: number, y: number) =>
+    (Math.round(x / bin_mm) + 32768) * 65536 + (Math.round(y / bin_mm) + 32768);
+
+  for (let i = 0; i < terrain.length; i += 3) {
+    const k = key(terrain[i], terrain[i + 1]);
+    const current = ground.get(k);
+    if (current === undefined || terrain[i + 2] > current) ground.set(k, terrain[i + 2]);
+  }
+
+  let count = 0;
+  let worst = 0;
+  let at: [number, number] | null = null;
+
+  for (let i = 0; i < featurePositions.length; i += 3) {
+    const x = featurePositions[i];
+    const y = featurePositions[i + 1];
+    let below = ground.get(key(x, y));
+
+    // Nearest filled bin, so a vertex just past the terrain edge is not
+    // reported as floating a kilometre in the air.
+    if (below === undefined) {
+      const gx = Math.round(x / bin_mm);
+      const gy = Math.round(y / bin_mm);
+      for (let r = 1; r <= 2 && below === undefined; r++) {
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            const v = ground.get(key((gx + dx) * bin_mm, (gy + dy) * bin_mm));
+            if (v !== undefined && (below === undefined || v > below)) below = v;
+          }
+        }
+      }
+    }
+    if (below === undefined) continue;
+
+    const above = featurePositions[i + 2] - below;
+    if (above <= allowed_mm) continue;
+    count++;
+    if (above > worst) {
+      worst = above;
+      at = [x, y];
+    }
+  }
+
+  return { count, worst_mm: worst, at };
+}

@@ -14,7 +14,7 @@ import { resolveGrid, resolveScale } from './coords';
 import { buildHeightfield, smoothHeightfield } from './heightfield';
 import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
-import { repairAndValidate, validateMesh } from './validate';
+import { findFloatingVertices, repairAndValidate, validateMesh } from './validate';
 import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
 import {
@@ -704,6 +704,28 @@ export async function assemble(
   };
 
   let parts = [terrainPart, ...featureParts, ...routeParts];
+
+  // Anything draped should sit within its own height of the ground. When it
+  // does not it shows as a cone or blade standing out of the model, and every
+  // other check still passes because the mesh is watertight either way.
+  for (const part of [...featureParts, ...routeParts]) {
+    const layer = config.layers[part.name];
+    const height_mm = layer ? Math.max(0.1, layer.height_mm * layer.heightScale) : 1.5;
+    // Generous: three times the feature's own height, and never less than 2 mm.
+    const allowed = Math.max(2, height_mm * 3);
+    const floating = findFloatingVertices(terrainPart.positions, part.positions, allowed);
+    if (floating.count > 0 && floating.at) {
+      warnings.push({
+        level: 'warn',
+        code: 'floating-geometry',
+        message:
+          `${floating.count} point(s) of the ${part.name} layer stand up to ` +
+          `${floating.worst_mm.toFixed(1)} mm above the ground beneath them — they will look ` +
+          `like spikes. Worst at ${floating.at[0].toFixed(1)}, ${floating.at[1].toFixed(1)} mm ` +
+          `from the model centre. This is a bug; please report it with those numbers.`,
+      });
+    }
+  }
 
   // --- Stage 7: colour mode (docs/02-feature-spec.md F6) --------------------
   //

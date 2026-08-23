@@ -14,7 +14,7 @@ import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from '../src/geometry/
 import { extrudeDraped } from '../src/geometry/extrude';
 import { sampleHeightfieldAt } from '../src/geometry/heightfield';
 import { worldToPrint } from '../src/geometry/coords';
-import { validateMesh } from '../src/geometry/validate';
+import { findFloatingVertices, validateMesh } from '../src/geometry/validate';
 import { makeHeightfield, scaleFor } from './helpers';
 import type { Pt } from '../src/data/gpx/simplify';
 import type { MultiPolygon } from '../src/geometry/polygons';
@@ -163,5 +163,50 @@ describe('draped features follow the terrain', () => {
     ];
     expect(worstDrapeError(lake, Infinity, across)).toBeGreaterThan(HEIGHT_MM * 0.5);
     expect(worstDrapeError(lake, terrainStep_m, across)).toBeLessThan(HEIGHT_MM * 0.25);
+  });
+});
+
+/**
+ * The check that would have caught the cones without a screenshot.
+ *
+ * Every existing check passed while the model was visibly wrong: an undraped
+ * road is perfectly watertight and manifold, it just is not where the ground
+ * is. So this looks for the symptom directly.
+ */
+describe('findFloatingVertices', () => {
+  /** A flat terrain patch as a bare vertex soup, which is all the check needs. */
+  const terrain = new Float32Array(
+    Array.from({ length: 40 * 40 }, (_, k) => {
+      const i = k % 40;
+      const j = Math.floor(k / 40);
+      return [i * 0.4, j * 0.4, 5];
+    }).flat(),
+  );
+
+  it('says nothing about geometry sitting on the ground', () => {
+    const onGround = new Float32Array([2, 2, 5.5, 3, 2, 5.6, 4, 4, 5.4]);
+    const r = findFloatingVertices(terrain, onGround, 2);
+    expect(r.count).toBe(0);
+    expect(r.at).toBeNull();
+  });
+
+  it('finds a spike and says where it is', () => {
+    const spike = new Float32Array([2, 2, 5.5, 6.4, 7.2, 11.5, 4, 4, 5.4]);
+    const r = findFloatingVertices(terrain, spike, 2);
+    expect(r.count).toBe(1);
+    expect(r.worst_mm).toBeCloseTo(6.5, 3);
+    expect(r.at?.[0]).toBeCloseTo(6.4, 3);
+    expect(r.at?.[1]).toBeCloseTo(7.2, 3);
+  });
+
+  it('does not report geometry that merely sits past the terrain edge', () => {
+    // Just outside the patch: it should take the nearest ground, not treat the
+    // absence of a bin as a spike.
+    const justOutside = new Float32Array([16.2, 16.2, 5.5]);
+    expect(findFloatingVertices(terrain, justOutside, 2).count).toBe(0);
+  });
+
+  it('handles empty input', () => {
+    expect(findFloatingVertices(new Float32Array(0), new Float32Array(0), 2).count).toBe(0);
   });
 });

@@ -185,6 +185,13 @@ export function App() {
    * too — leaving roads highlighted for an area that is no longer selected
    * would be worse than showing nothing.
    */
+  // Dev-only, beside the map and bundle handles: lets an exact selection be
+  // reproduced from the console when chasing a reported artefact.
+  if (import.meta.env.DEV) {
+    (window as unknown as { __setShape?: (s: SelectionShape) => void }).__setShape = (next) =>
+      applyShape(next, 'Diagnostic selection', true);
+  }
+
   const clearShape = useCallback(() => {
     setShape(null);
     setTool(null);
