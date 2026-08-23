@@ -105,6 +105,10 @@ export interface FeatureBuildStats {
   droppedSubtypes: string[];
   /** Classes that will build but merge into solid areas at this size. */
   crowdedSubtypes: string[];
+  /** Buildings too narrow to print at all, and so left out. */
+  tooNarrow: number;
+  /** Buildings shortened because they would print as needles. */
+  shortened: number;
   /** Share of the model footprint this layer covers, 0-1. */
   coverage: number;
   /**
@@ -119,6 +123,21 @@ export interface FeatureBuildStats {
  * reading as a map. A quarter is generous — at a third, a street grid closes up.
  */
 const COVERAGE_LIMIT = 0.25;
+
+/**
+ * How much taller than its own footprint a building may print.
+ *
+ * A real 110 m tower on a 2 km model is 5.5 mm tall on a 2 mm footprint, and a
+ * 110 m mast is 5.5 mm on a footprint of a tenth of a millimetre. The second is
+ * geometrically correct and useless: it renders as a needle shooting out of the
+ * model and snaps off the bed if it prints at all. Measured on 208 real
+ * Islamabad buildings at 2 km, towers reached 8.19 mm while the ENTIRE terrain
+ * relief was 1.49 mm.
+ *
+ * Four is deliberately generous — it leaves genuine high-rises looking like
+ * high-rises and only touches what is already a spike.
+ */
+const MAX_BUILDING_ASPECT = 4;
 
 /**
  * Narrowest line a printer can lay down, in print millimetres.
@@ -640,6 +659,8 @@ export function buildLineLayer(
     crowdedSubtypes: [],
     coverage: 0,
     suggestedMinWidth_mm: 0,
+    tooNarrow: 0,
+    shortened: 0,
   };
 
   if (!settings?.enabled || features.length === 0) {
@@ -862,6 +883,8 @@ export function buildPolygonLayer(
     crowdedSubtypes: [],
     coverage: 0,
     suggestedMinWidth_mm: 0,
+    tooNarrow: 0,
+    shortened: 0,
   };
 
   if (!settings?.enabled || features.length === 0) return { part: null, stats };
@@ -910,14 +933,45 @@ export function buildPolygonLayer(
       continue;
     }
 
-    // A building's height comes from the tag cascade, and `min_height` lifts
-    // the bottom for the upper part of a stepped building — but the bottom
-    // still has to reach the terrain, or the solid floats.
+    // A building's height comes from the tag cascade.
+    //
+    // Scaled by `scale.scale`, NOT `scale.zScale`. Vertical exaggeration is a
+    // cartographic device for making terrain relief readable; a building is a
+    // real object with a real height. Exaggerating it stretches it vertically
+    // while its footprint stays true, which makes every building that much
+    // more slender — the exact direction that turns towers into needles.
     const real_m = feature.height_m ?? DEFAULT_BUILDING_HEIGHT_M;
-    const height_mm = Math.max(
-      0.1,
-      real_m * scale.zScale * settings.heightScale,
-    );
+    let height_mm = Math.max(0.1, real_m * scale.scale * settings.heightScale);
+
+    // Footprint size, to judge whether this can be printed standing up.
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const ring of clipped[0] ?? []) {
+      for (const [x, y] of ring) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+    const footprint_mm = Math.min(maxX - minX, maxY - minY) * scale.scale;
+
+    if (Number.isFinite(footprint_mm) && footprint_mm > 0) {
+      // Below one nozzle there is nothing to print, and a sub-nozzle tower is
+      // the worst version of that: tall, unsupported and doomed.
+      if (footprint_mm < options.nozzleDiameter_mm) {
+        stats.tooNarrow++;
+        stats.features--;
+        continue;
+      }
+      const cap = footprint_mm * MAX_BUILDING_ASPECT;
+      if (height_mm > cap) {
+        height_mm = cap;
+        stats.shortened++;
+      }
+    }
 
     if (spent >= options.triangleBudget) {
       stats.truncated = true;

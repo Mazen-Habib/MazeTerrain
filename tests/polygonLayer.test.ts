@@ -130,7 +130,9 @@ describe('buildPolygonLayer — buildings', () => {
 
   it('respects the triangle budget rather than dying inside V8', () => {
     const many: PolygonFeature[] = [];
-    for (let i = 0; i < 200; i++) many.push(polygon([box(-2000 + i * 20, 0, 8)], { height_m: 9 }));
+    // Footprints big enough to survive the printability check, so this test
+    // measures the budget and not the sub-nozzle drop.
+    for (let i = 0; i < 200; i++) many.push(polygon([box(-2400 + i * 24, 0, 60)], { height_m: 9 }));
 
     const built = buildPolygonLayer('buildings', many, { ...options, triangleBudget: 200 });
     expect(built.stats.truncated).toBe(true);
@@ -235,5 +237,91 @@ describe('groupPolygons', () => {
     ]);
     expect(grouped.get('buildings')).toHaveLength(2);
     expect(grouped.get('water')).toHaveLength(1);
+  });
+});
+
+/**
+ * Towers must not print as needles.
+ *
+ * A real 110 m building on a 2 km model is genuinely 5.5 mm tall; on a 0.1 mm
+ * footprint that is geometrically correct and useless. Measured on 208 real
+ * Islamabad buildings at 2 km: towers reached 8.19 mm while the entire terrain
+ * relief was 1.49 mm, and seven footprints were under a nozzle.
+ */
+describe('buildPolygonLayer — buildings that would print as spikes', () => {
+  /** Small model, flat ground: the case where the vertical scale stays high. */
+  const flat = makeHeightfield(60, 60, () => 500, 34);
+  const flatScale = scaleFor(flat);
+  const opts = {
+    heightfield: flat,
+    scale: flatScale,
+    selection: null,
+    nozzleDiameter_mm: 0.4,
+    baseThickness_mm: 3,
+    layers,
+    triangleBudget: 5_000_000,
+  };
+
+  function tower(half_m: number, height_m: number): PolygonFeature {
+    return {
+      layer: 'buildings',
+      subtype: 'other',
+      bridge: false,
+      layerOrder: 0,
+      height_m,
+      rings: [box(0, 0, half_m).map((p) => unprojectENU(p[0], p[1], flatScale.origin))],
+    };
+  }
+
+  it('leaves a normal building alone', () => {
+    const built = buildPolygonLayer('buildings', [tower(300, 12)], opts);
+    expect(built.stats.tooNarrow).toBe(0);
+    expect(built.stats.shortened).toBe(0);
+    expect(built.part).not.toBeNull();
+  });
+
+  it('drops a footprint narrower than the nozzle', () => {
+    // A mast: a few metres across, and nothing a printer can stand up.
+    const built = buildPolygonLayer('buildings', [tower(2, 110)], opts);
+    expect(built.stats.tooNarrow).toBe(1);
+    expect(built.part).toBeNull();
+  });
+
+  /** Vertical span of a part: the building's height plus its penetration. */
+  function zSpan(positions: Float32Array): number {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 2; i < positions.length; i += 3) {
+      lo = Math.min(lo, positions[i]);
+      hi = Math.max(hi, positions[i]);
+    }
+    return hi - lo;
+  }
+
+  it('shortens a tower that would be far taller than it is wide', () => {
+    const built = buildPolygonLayer('buildings', [tower(30, 400)], opts);
+    expect(built.stats.shortened).toBe(1);
+
+    const uncapped = 400 * flatScale.scale;
+    const cap = 60 * flatScale.scale * 4;
+    // Well short of what it asked for, and near the cap it was given.
+    expect(zSpan(built.part!.positions)).toBeLessThan(uncapped);
+    expect(zSpan(built.part!.positions)).toBeLessThan(cap * 1.6);
+  });
+
+  it('uses true vertical scale, not the terrain exaggeration', () => {
+    // Exaggeration exists to make relief readable; a building is a real object,
+    // and stretching it vertically is what makes towers slender enough to snap.
+    expect(flatScale.zScale).toBeGreaterThan(flatScale.scale);
+
+    const built = buildPolygonLayer('buildings', [tower(400, 40)], opts);
+    const span = zSpan(built.part!.positions);
+
+    // Height + penetration, where penetration is at least 1 mm.
+    const trueSpan = 40 * flatScale.scale + Math.max(1, 40 * flatScale.scale * 0.25);
+    const exaggeratedSpan = 40 * flatScale.zScale + Math.max(1, 40 * flatScale.zScale * 0.25);
+
+    expect(span).toBeCloseTo(trueSpan, 2);
+    expect(span).toBeLessThan(exaggeratedSpan - 0.1);
   });
 });

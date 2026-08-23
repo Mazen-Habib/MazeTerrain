@@ -178,6 +178,17 @@ const DEAD_RAILWAYS = new Set(['abandoned', 'disused', 'razed', 'proposed', 'con
 
 /** docs/04: building height cascade — `height` -> `building:levels` x 3 m -> 6 m. */
 export const METRES_PER_LEVEL = 3.0;
+
+/**
+ * Ceiling on any height read from OSM.
+ *
+ * Tag values are user-entered and occasionally nonsense. `building:levels=99999`
+ * is a real shape of typo, and unclamped it asks for a 300 km spike: the mesh
+ * builds, validates as watertight, and renders as a needle shooting off the
+ * model. Burj Khalifa is 828 m, so a kilometre is far above anything genuine
+ * and far below anything that can wreck a model.
+ */
+export const MAX_STRUCTURE_HEIGHT_M = 1000;
 export const DEFAULT_BUILDING_HEIGHT_M = 6;
 
 export interface Classification {
@@ -355,11 +366,16 @@ export function buildingSubtype(tags: Tags): string {
  * Never returns zero: an unprintable flat footprint is worse than an estimate.
  */
 export function buildingHeight_m(tags: Tags): number {
+  // Clamped, not trusted. These are hand-entered values, and a mistyped
+  // `building:levels` asks for a spike hundreds of kilometres tall that the
+  // rest of the pipeline will happily build and validate.
   const explicit = parseLength(tags['height']);
-  if (explicit !== null && explicit > 0) return explicit;
+  if (explicit !== null && explicit > 0) return Math.min(explicit, MAX_STRUCTURE_HEIGHT_M);
 
   const levels = Number.parseFloat(tags['building:levels'] ?? '');
-  if (Number.isFinite(levels) && levels > 0) return levels * METRES_PER_LEVEL;
+  if (Number.isFinite(levels) && levels > 0) {
+    return Math.min(levels * METRES_PER_LEVEL, MAX_STRUCTURE_HEIGHT_M);
+  }
 
   return DEFAULT_BUILDING_HEIGHT_M;
 }

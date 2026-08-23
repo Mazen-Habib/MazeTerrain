@@ -426,6 +426,27 @@ export async function assemble(
           });
         }
 
+        if (built.stats.tooNarrow > 0 || built.stats.shortened > 0) {
+          const bits: string[] = [];
+          if (built.stats.tooNarrow > 0) {
+            bits.push(
+              `${built.stats.tooNarrow} were narrower than your ` +
+                `${config.nozzleDiameter_mm} mm nozzle and were left out`,
+            );
+          }
+          if (built.stats.shortened > 0) {
+            bits.push(
+              `${built.stats.shortened} were shortened because they would have printed as ` +
+                `spikes taller than four times their own footprint`,
+            );
+          }
+          warnings.push({
+            level: 'warn',
+            code: 'building-unprintable',
+            message: `Of the buildings here, ${bits.join(', and ')}.`,
+          });
+        }
+
         done++;
         report({
           stage: 'building-features',
