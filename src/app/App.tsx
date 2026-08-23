@@ -13,7 +13,7 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { DEM_DATASETS } from '../data/dem/datasets';
-import { defaultConfig, PRESETS } from '../config/presets';
+import { BED_PRESETS, defaultConfig, PRESETS } from '../config/presets';
 import { GpxParseError, parseGpxText } from '../data/gpx/parse';
 import type { Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
@@ -586,6 +586,42 @@ export function App() {
                 <option value={0.8}>0.8 mm — Draft</option>
               </select>
               <p className="field__hint">Sets the floor on terrain detail.</p>
+            </div>
+
+            <div className="field">
+              <label className="field__label" htmlFor="bed">
+                Printer bed
+              </label>
+              <select
+                id="bed"
+                className="select"
+                value={
+                  config.bedSize_mm
+                    ? (BED_PRESETS.find(
+                        (b) =>
+                          b.size &&
+                          b.size[0] === config.bedSize_mm![0] &&
+                          b.size[1] === config.bedSize_mm![1],
+                      )?.id ?? 'none')
+                    : 'none'
+                }
+                onChange={(e) =>
+                  update({
+                    bedSize_mm: BED_PRESETS.find((b) => b.id === e.target.value)?.size ?? null,
+                  })
+                }
+                disabled={busy}
+              >
+                {BED_PRESETS.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+              <p className="field__hint">
+                Warns when the model will not fit. Never blocks — printing in sections is a
+                perfectly good plan.
+              </p>
             </div>
           </section>
 

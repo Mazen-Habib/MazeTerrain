@@ -64,6 +64,17 @@ export const PRESETS: Preset[] = [
   },
 ];
 
+/** Common bed sizes, so the setting is a pick rather than two numbers to type. */
+export const BED_PRESETS: Array<{ id: string; label: string; size: [number, number] | null }> = [
+  { id: 'bambu-x1', label: 'Bambu X1 / P1 (256 × 256)', size: [256, 256] },
+  { id: 'bambu-a1', label: 'Bambu A1 (256 × 256)', size: [256, 256] },
+  { id: 'prusa-mk4', label: 'Prusa MK4 (250 × 210)', size: [250, 210] },
+  { id: 'prusa-mini', label: 'Prusa Mini (180 × 180)', size: [180, 180] },
+  { id: 'ender-3', label: 'Creality Ender 3 (220 × 220)', size: [220, 220] },
+  { id: 'large', label: 'Large format (350 × 350)', size: [350, 350] },
+  { id: 'none', label: "Don't check", size: null },
+];
+
 export function getPreset(id: string): Preset {
   const p = PRESETS.find((x) => x.id === id);
   if (!p) throw new Error(`Unknown preset: ${id}`);
@@ -87,6 +98,9 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
     smoothing: 0,
     layerHeight_mm: 0.2,
     nozzleDiameter_mm: 0.4,
+    // 256 mm square: the Bambu X1/P1 bed, and close enough to a Prusa MK4 that
+    // it is a useful default rather than an arbitrary one.
+    bedSize_mm: [256, 256],
     layers: defaultLayers(),
   };
 }

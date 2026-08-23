@@ -698,6 +698,26 @@ export function printChecks(
     });
   }
 
+  // The model does not have to fit the bed — splitting it is a legitimate plan,
+  // and Phase 4 has multi-tile output — so this says by how much and stops.
+  if (config.bedSize_mm) {
+    const [bedW, bedD] = config.bedSize_mm;
+    // Either orientation counts: a 300 x 100 model fits a 250 x 210 bed turned.
+    const fits =
+      (w <= bedW && d <= bedD) || (w <= bedD && d <= bedW);
+    if (!fits) {
+      const over = Math.max(w - Math.max(bedW, bedD), d - Math.min(bedW, bedD));
+      out.push({
+        level: 'warn',
+        code: 'over-bed-size',
+        message:
+          `Model is ${w.toFixed(0)} × ${d.toFixed(0)} mm, larger than your ` +
+          `${bedW} × ${bedD} mm bed by about ${Math.max(1, Math.round(over))} mm. ` +
+          `Reduce the model size, or print it in sections.`,
+      });
+    }
+  }
+
   if (triangles > 2_000_000) {
     out.push({
       level: 'warn',

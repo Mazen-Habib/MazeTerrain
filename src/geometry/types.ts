@@ -120,6 +120,15 @@ export interface GenerateConfig {
    */
   layerHeight_mm: number;
   /**
+   * Printer bed, millimetres, or null for "do not check".
+   *
+   * The last of the F8 checks. A model larger than the bed is not a geometry
+   * error and must not block export — plenty of people slice on one machine and
+   * print on another, or intend to split the model — so this warns and says by
+   * how much.
+   */
+  bedSize_mm: [number, number] | null;
+  /**
    * The printer's horizontal resolution limit. Not decoration either: it is the
    * floor on the terrain sampling step, because sampling finer than the nozzle
    * manufactures detail the printer cannot lay down.

@@ -40,6 +40,7 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     smoothing: 0,
     layerHeight_mm: 0.2,
     nozzleDiameter_mm: 0.4,
+    bedSize_mm: [256, 256],
     layers: defaultLayers(),
     ...overrides,
   };
