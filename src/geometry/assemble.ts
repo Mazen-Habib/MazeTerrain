@@ -407,14 +407,22 @@ export async function assemble(
         // nozzle rather than silently raising it back up.
         if (built.stats.narrowestWidth_mm > 0 &&
             built.stats.narrowestWidth_mm < config.nozzleDiameter_mm - 1e-6) {
+          const auto = config.layers[layer]?.minWidth_mm === 'auto';
           warnings.push({
             level: 'warn',
             code: 'feature-below-nozzle',
-            message:
-              `The narrowest ${label} print at ` +
-              `${built.stats.narrowestWidth_mm.toFixed(2)} mm, under your ` +
-              `${config.nozzleDiameter_mm} mm nozzle. An FDM slicer will drop them; ` +
-              `raise "Min width" in the layer if you are printing this.`,
+            message: auto
+              ? `${LAYER_BY_ID[layer].label} were thinned to ` +
+                `${built.stats.narrowestWidth_mm.toFixed(2)} mm so the street pattern stays ` +
+                `readable at this size — at your ${config.nozzleDiameter_mm} mm nozzle they ` +
+                `would otherwise cover most of the model. An FDM slicer will drop lines this ` +
+                `fine, so set ${LAYER_BY_ID[layer].label} → Min width to ` +
+                `${config.nozzleDiameter_mm} mm if you are printing this, and expect them to ` +
+                `crowd.`
+              : `The narrowest ${label} print at ` +
+                `${built.stats.narrowestWidth_mm.toFixed(2)} mm, under your ` +
+                `${config.nozzleDiameter_mm} mm nozzle. An FDM slicer will drop them; ` +
+                `raise "Min width" in the layer if you are printing this.`,
           });
         }
 

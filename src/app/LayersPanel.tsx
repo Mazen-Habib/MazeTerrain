@@ -207,7 +207,7 @@ export function LayersPanel({
                           })
                         }
                       />
-                      Auto ({nozzleDiameter_mm.toFixed(2)} mm, one nozzle)
+                      Auto (one nozzle, thinner if the layer would crowd)
                     </label>
                   </div>
                   {settings.minWidth_mm === 'auto' ? null : (

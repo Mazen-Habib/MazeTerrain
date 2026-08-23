@@ -132,6 +132,36 @@ export function autoMinWidth_mm(nozzleDiameter_mm: number): number {
   return nozzleDiameter_mm;
 }
 
+/** Nothing useful survives below this, whatever the arithmetic says. */
+const ABSOLUTE_MIN_WIDTH_MM = 0.06;
+
+/**
+ * What "Auto" resolves to: the nozzle, unless that would bury the model.
+ *
+ * A fixed floor cannot be right at every scale. One nozzle is exactly right on
+ * a neighbourhood, where roads are already wider than that at true scale. On a
+ * city it is a disaster: measured over 9.3 km of Islamabad, 1 237 km of road at
+ * a 0.4 mm floor covers **80.6% of the model**. That is not a map, it is a
+ * slab with a few gaps in it — and no fixed floor fixes it, because the most
+ * aggressive setting still covers a third.
+ *
+ * So Auto starts at the nozzle and comes down until the layer fits its
+ * legibility budget. On a neighbourhood that first guess already fits and
+ * nothing changes; on a city it drops until the street pattern reappears. When
+ * it lands under the nozzle the build says so — a legible model that needs a
+ * finer nozzle is a better default than an illegible one that prints, and the
+ * user can raise it back with the Min width control either way.
+ */
+export function autoFloorForCoverage_mm(
+  nozzleDiameter_mm: number,
+  coverageAtNozzle: number,
+): number {
+  const start = autoMinWidth_mm(nozzleDiameter_mm);
+  if (!(coverageAtNozzle > COVERAGE_LIMIT)) return start;
+  const scaled = (start * COVERAGE_LIMIT) / coverageAtNozzle;
+  return Math.max(ABSOLUTE_MIN_WIDTH_MM, Math.floor(scaled * 100) / 100);
+}
+
 export function resolveMinWidth_mm(
   setting: number | 'auto',
   nozzleDiameter_mm: number,
@@ -486,8 +516,6 @@ export function planLineLayer(
   scale: ResolvedScale,
   nozzleDiameter_mm: number,
 ): LayerPlan {
-  const minWidth_mm = resolveMinWidth_mm(settings.minWidth_mm, nozzleDiameter_mm);
-
   const projected = new Map<LineFeature, Pt[]>();
   const lengthBySubtype = new Map<string, number>();
   const naturalBySubtype = new Map<string, number>();
@@ -505,6 +533,27 @@ export function planLineLayer(
     naturalBySubtype.set(feature.subtype, feature.width_m);
     if (feature.width_m > 0) narrowest_m = Math.min(narrowest_m, feature.width_m);
   }
+
+  const modelArea_mm2 = scale.extentX_m * scale.scale * (scale.extentY_m * scale.scale);
+
+  /** Share of the model this layer would cover with a given floor. */
+  const coverageWithFloor = (floor_mm: number) => {
+    if (!(modelArea_mm2 > 0)) return 0;
+    let area = 0;
+    for (const [subtype, length_m] of lengthBySubtype) {
+      const natural_m = naturalBySubtype.get(subtype) ?? 0;
+      const w = ladderWidth_mm(natural_m, narrowest_m, floor_mm, scale.scale) * settings.widthScale;
+      area += length_m * scale.scale * w;
+    }
+    return area / modelArea_mm2;
+  };
+
+  // 'auto' means "as fine as the printer needs, unless that buries the model".
+  // An explicit number is taken at face value, including below the nozzle.
+  const minWidth_mm =
+    settings.minWidth_mm === 'auto'
+      ? autoFloorForCoverage_mm(nozzleDiameter_mm, coverageWithFloor(autoMinWidth_mm(nozzleDiameter_mm)))
+      : resolveMinWidth_mm(settings.minWidth_mm, nozzleDiameter_mm);
 
   // The ladder is anchored on the narrowest class actually present, so a
   // selection holding only motorways prints them at the floor rather than
@@ -528,8 +577,6 @@ export function planLineLayer(
     widthBySubtype.set(subtype, widthFor(subtype, natural_m));
     autoWidthBySubtype.set(subtype, autoWidth(natural_m));
   }
-
-  const modelArea_mm2 = scale.extentX_m * scale.scale * (scale.extentY_m * scale.scale);
 
   // Always work out which classes are past the budget. Whether that *removes*
   // them is a separate question, and by default the answer is no: a crowded

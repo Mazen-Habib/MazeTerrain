@@ -54,7 +54,11 @@ describe('buildFeaturePreview', () => {
    * than after.
    */
   it('flags crowded classes but still marks them as included', () => {
-    const { geojson, summary } = buildFeaturePreview(blanketing(), testConfig());
+    // An explicit floor, because 'auto' now lowers itself until the layer fits
+    // and so never crowds — that is the subject of its own test below.
+    const config = testConfig();
+    config.layers.roads = { ...config.layers.roads, minWidth_mm: 0.4 };
+    const { geojson, summary } = buildFeaturePreview(blanketing(), config);
 
     expect(summary.crowdedByLayer.roads).toContain('residential');
     expect(summary.coverageByLayer.roads).toBeGreaterThan(0.25);
@@ -73,7 +77,11 @@ describe('buildFeaturePreview', () => {
 
   it('marks classes as not included once the filter is set to enforce', () => {
     const config = testConfig();
-    config.layers.roads = { ...config.layers.roads, legibilityFilter: true };
+    config.layers.roads = {
+      ...config.layers.roads,
+      legibilityFilter: true,
+      minWidth_mm: 0.4,
+    };
     const { geojson, summary } = buildFeaturePreview(blanketing(), config);
 
     expect(summary.droppedByLayer.roads).toContain('residential');
@@ -104,6 +112,7 @@ describe('buildFeaturePreview', () => {
   /** Lowering the floor is the lever the warning suggests — it must actually work. */
   it('stops crowding once the floor drops to the suggested width', () => {
     const config = testConfig();
+    config.layers.roads = { ...config.layers.roads, minWidth_mm: 0.4 };
     const features = blanketing();
 
     const first = buildFeaturePreview(features, config);
@@ -116,5 +125,54 @@ describe('buildFeaturePreview', () => {
     expect(second.summary.crowdedByLayer.roads).toBeUndefined();
     expect(second.summary.coverageByLayer.roads).toBeLessThanOrEqual(0.25);
     expect(second.summary.included).toBe(402);
+  });
+});
+
+/**
+ * "Auto" min width.
+ *
+ * A fixed floor cannot be right at every scale. One nozzle is exactly right on
+ * a neighbourhood; on a city it buries the model — 1 237 km of Islamabad road
+ * at a 0.4 mm floor covers 80.6% of a 9.3 km model. Auto starts at the nozzle
+ * and comes down until the layer fits, so the same default works at both ends.
+ */
+describe('auto min width adapts to the scale', () => {
+  /** Enough residential to bury the model at a fixed floor. */
+  const blanketing = () => [...many('motorway', 20, 2), ...many('residential', 6, 400)];
+
+  it('leaves a sparse model at one nozzle', () => {
+    const config = testConfig();
+    const sparse = many('motorway', 20, 2);
+    const { summary } = buildFeaturePreview(sparse, config);
+    // Nothing crowded, so nothing to reduce.
+    expect(summary.crowdedByLayer.roads).toBeUndefined();
+    expect(summary.widthByLayer.roads.motorway).toBeGreaterThanOrEqual(
+      config.nozzleDiameter_mm - 1e-9,
+    );
+  });
+
+  it('comes down on a model a fixed floor would bury', () => {
+    const dense = blanketing();
+    const auto = buildFeaturePreview(dense, testConfig());
+
+    const fixed = testConfig();
+    fixed.layers.roads = { ...fixed.layers.roads, minWidth_mm: 0.4 };
+    const pinned = buildFeaturePreview(dense, fixed);
+
+    expect(auto.summary.coverageByLayer.roads).toBeLessThan(
+      pinned.summary.coverageByLayer.roads,
+    );
+    expect(auto.summary.widthByLayer.roads.residential).toBeLessThan(
+      pinned.summary.widthByLayer.roads.residential,
+    );
+    // ...and the point of coming down: the model reads as a map again.
+    expect(auto.summary.coverageByLayer.roads).toBeLessThanOrEqual(0.26);
+  });
+
+  it('still lets an explicit width win, however crowded', () => {
+    const config = testConfig();
+    config.layers.roads = { ...config.layers.roads, minWidth_mm: 0.8 };
+    const { summary } = buildFeaturePreview(blanketing(), config);
+    expect(summary.widthByLayer.roads.residential).toBeGreaterThanOrEqual(0.8 - 1e-9);
   });
 });

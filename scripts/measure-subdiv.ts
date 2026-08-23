@@ -40,3 +40,8 @@ console.log(
   `  ${built.stats.triangles.toLocaleString().padStart(10)} tris  ${((Date.now()-t0)/1000).toFixed(1)}s` +
   `  open ${v?.openEdges} nonMan ${v?.nonManifoldEdges}${built.stats.truncated ? '  TRUNCATED' : ''}`,
 );
+console.log(
+  `  widths ${built.stats.narrowestWidth_mm.toFixed(3)}-${built.stats.width_mm.toFixed(2)} mm ` +
+  `(${(built.stats.narrowestWidth_mm/scale.scale).toFixed(0)}-${(built.stats.width_mm/scale.scale).toFixed(0)} m)  ` +
+  `coverage ${(built.stats.coverage*100).toFixed(1)}%  crowded: ${built.stats.crowdedSubtypes.join(',')||'(none)'}`,
+);
