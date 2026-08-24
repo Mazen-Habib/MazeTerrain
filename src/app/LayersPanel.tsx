@@ -179,6 +179,13 @@ export function LayersPanel({
                     step={0.1}
                     disabled={busy}
                     onChange={(v) => onChange(definition.id, { height_mm: v })}
+                    {...(definition.id === 'buildings'
+                      ? {
+                          hint:
+                            'A minimum. Real building heights rise past it; at city scale ' +
+                            'most are far below it and would otherwise be invisible.',
+                        }
+                      : {})}
                   />
                   <NumberField
                     label="Width scale"

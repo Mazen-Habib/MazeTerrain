@@ -440,10 +440,17 @@ export async function assemble(
                 `spikes taller than four times their own footprint`,
             );
           }
+          const total = built.stats.features + built.stats.tooNarrow;
+          const mostlyGone = total > 0 && built.stats.tooNarrow / total > 0.5;
           warnings.push({
             level: 'warn',
             code: 'building-unprintable',
-            message: `Of the buildings here, ${bits.join(', and ')}.`,
+            message: mostlyGone
+              ? `Most buildings cannot be shown at this size: ${built.stats.tooNarrow} of ` +
+                `${total} are narrower than your ${config.nozzleDiameter_mm} mm nozzle and were ` +
+                `left out. Buildings need roughly a 2 km selection or smaller to read as ` +
+                `buildings — turn the layer off, or select a smaller area.`
+              : `Of the buildings here, ${bits.join(', and ')}.`,
           });
         }
 

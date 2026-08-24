@@ -933,7 +933,14 @@ export function buildPolygonLayer(
       continue;
     }
 
-    // A building's height comes from the tag cascade.
+    // A building's height is its real height, with a printable floor.
+    //
+    // The floor is the layer's Height setting, and it is what makes buildings
+    // visible at all. True scale alone does not: measured on real data, a 2 km
+    // model puts the median building at 0.298 mm — one and a half layer heights
+    // — so a whole city renders as flat splatter even where every footprint is
+    // comfortably printable. Taller buildings still rise past the floor, so the
+    // variation that is actually representable survives.
     //
     // Scaled by `scale.scale`, NOT `scale.zScale`. Vertical exaggeration is a
     // cartographic device for making terrain relief readable; a building is a
@@ -941,7 +948,8 @@ export function buildPolygonLayer(
     // while its footprint stays true, which makes every building that much
     // more slender — the exact direction that turns towers into needles.
     const real_m = feature.height_m ?? DEFAULT_BUILDING_HEIGHT_M;
-    let height_mm = Math.max(0.1, real_m * scale.scale * settings.heightScale);
+    let height_mm =
+      Math.max(0.1, Math.max(settings.height_mm, real_m * scale.scale)) * settings.heightScale;
 
     // Footprint size, to judge whether this can be printed standing up.
     let minX = Infinity;

@@ -325,3 +325,70 @@ describe('buildPolygonLayer — buildings that would print as spikes', () => {
     expect(span).toBeLessThan(exaggeratedSpan - 0.1);
   });
 });
+
+
+/**
+ * Buildings need a printable minimum height.
+ *
+ * True scale alone does not give one: measured on real Islamabad data, a 2 km
+ * model puts the MEDIAN building at 0.298 mm tall — one and a half layers at
+ * 0.2 mm — and a 9.2 km model at 0.065 mm. The layer renders as flat splatter
+ * however good the footprints are, and the Height control did nothing at all
+ * for buildings because the builder never read it.
+ */
+describe('buildPolygonLayer — buildings have a printable height', () => {
+  const flat = makeHeightfield(60, 60, () => 500, 34);
+  const flatScale = scaleFor(flat);
+
+  function opts(height_mm: number) {
+    return {
+      heightfield: flat,
+      scale: flatScale,
+      selection: null,
+      nozzleDiameter_mm: 0.4,
+      baseThickness_mm: 3,
+      layers: { ...layers, buildings: { ...layers.buildings, height_mm } },
+      triangleBudget: 5_000_000,
+    };
+  }
+
+  function tower(half_m: number, height_m: number): PolygonFeature {
+    return {
+      layer: 'buildings',
+      subtype: 'other',
+      bridge: false,
+      layerOrder: 0,
+      height_m,
+      rings: [box(0, 0, half_m).map((p) => unprojectENU(p[0], p[1], flatScale.origin))],
+    };
+  }
+
+  function span(positions: Float32Array): number {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 2; i < positions.length; i += 3) {
+      lo = Math.min(lo, positions[i]);
+      hi = Math.max(hi, positions[i]);
+    }
+    return hi - lo;
+  }
+
+  it('lifts a squat building to the layer minimum', () => {
+    // 6 m is the OSM default, and 6 m at this scale is 0.3 mm — invisible.
+    const built = buildPolygonLayer('buildings', [tower(300, 6)], opts(0.6));
+    // Height plus penetration, and penetration is at least 1 mm.
+    expect(span(built.part!.positions)).toBeCloseTo(0.6 + 1, 2);
+  });
+
+  it('lets a real building rise past the minimum', () => {
+    const short = buildPolygonLayer('buildings', [tower(300, 6)], opts(0.6));
+    const tall = buildPolygonLayer('buildings', [tower(300, 60)], opts(0.6));
+    expect(span(tall.part!.positions)).toBeGreaterThan(span(short.part!.positions) + 1);
+  });
+
+  it('honours the Height control, which used to be ignored', () => {
+    const low = buildPolygonLayer('buildings', [tower(300, 6)], opts(0.6));
+    const high = buildPolygonLayer('buildings', [tower(300, 6)], opts(2.0));
+    expect(span(high.part!.positions)).toBeGreaterThan(span(low.part!.positions));
+  });
+});

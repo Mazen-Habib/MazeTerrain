@@ -89,7 +89,12 @@ export const LAYERS: LayerDefinition[] = [
     kind: 'polygon',
     enabled: false,
     color: '#D9D2C5',
-    height_mm: 0,
+    // A MINIMUM, not a fixed height: real heights scale past it. Three layers
+    // at 0.2 mm, because below that a building is not a block, it is a stain.
+    // Measured on real Islamabad data, a 2 km model puts the MEDIAN building at
+    // 0.298 mm tall — one and a half layers — so without a floor the layer
+    // renders as flat splatter however good the footprints are.
+    height_mm: 0.6,
     subtypes: ['residential', 'commercial', 'industrial', 'retail', 'civic', 'religious', 'other'],
   },
   {
