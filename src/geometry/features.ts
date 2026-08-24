@@ -728,16 +728,27 @@ export function buildLineLayer(
   const drapeZ = (x_m: number, y_m: number) =>
     worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2];
 
-  const extrudeOptions = {
+  /**
+   * Extrusion settings for one width group.
+   *
+   * Vertices go wherever the terrain has them, or the contour of a long
+   * straight road is two edges with almost nothing between them and a single
+   * triangle spans hundreds of metres of ground it never sampled — the terrain
+   * then punches straight through the road.
+   *
+   * But never finer than the ribbon is wide. Refining ACROSS a ribbon buys no
+   * accuracy, because the ground does not change over a millimetre or two, and
+   * it is pure cost: measured on a real 21 323 point GPX, refining to the
+   * terrain step spent 65 816 triangles where the ribbon width spent 23 700 for
+   * an IDENTICAL 0.153 mm drape error, and produced twice the sliver triangles
+   * doing it.
+   */
+  const extrudeOptionsFor = (groupWidth_m: number) => ({
     height_mm,
     penetration_mm,
     minBottom_mm,
-    // Vertices wherever the terrain has them. Without this the contour of a
-    // long straight road is two edges with almost nothing between them, so one
-    // triangle spans hundreds of metres of ground it never sampled and the
-    // terrain punches straight through the road.
-    maxEdge_m: terrainStep_m,
-  };
+    maxEdge_m: Math.max(terrainStep_m, groupWidth_m),
+  });
 
   const solids: SolidMesh[] = [];
   let spent = 0;
@@ -780,7 +791,7 @@ export function buildLineLayer(
           ribbon.polygons,
           drapeZ,
           (x_m, y_m) => [x_m * scale.scale, y_m * scale.scale],
-          extrudeOptions,
+          extrudeOptionsFor(width_m),
         );
         if (mesh.triangles > 0) {
           solids.push(mesh);
@@ -812,7 +823,7 @@ export function buildLineLayer(
         ribbon.polygons,
         bridgeSampler(centreline, heightfield, scale),
         (x_m, y_m) => [x_m * scale.scale, y_m * scale.scale],
-        extrudeOptions,
+        extrudeOptionsFor(width_m),
       );
       if (mesh.triangles > 0) {
         solids.push(mesh);

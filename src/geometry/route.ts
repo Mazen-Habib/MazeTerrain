@@ -264,7 +264,9 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
       // never printed, and clamping it would make the channel shallower than
       // asked for wherever the terrain dips.
       minBottom_mm: options.cut ? -Infinity : Math.min(0.2, options.baseThickness_mm / 2),
-      maxEdge_m: terrainStep_m,
+      // Never finer than the ribbon is wide: refining across it buys no
+      // accuracy and doubles the sliver count. See features.ts for the numbers.
+      maxEdge_m: Math.max(terrainStep_m, width_m),
     },
   );
 
