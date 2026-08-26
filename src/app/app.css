@@ -884,3 +884,8 @@ body {
   outline: none;
   border-color: var(--accent);
 }
+
+.textInput--wide {
+  display: block;
+  width: 100%;
+}

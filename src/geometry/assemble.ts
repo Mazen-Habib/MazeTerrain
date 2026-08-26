@@ -19,6 +19,7 @@ import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
 import { traceContours, suggestInterval } from './contours';
 import { buildFrame, frameSubmersion } from './frame';
+import { buildLabelTool, labelCoverage } from './label';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
 import type { MultiPolygon } from './polygons';
 import { extrudeDraped } from './extrude';
@@ -116,6 +117,12 @@ const CUT_TOOL_HEADROOM_MM = 5;
  * along a third of its length is not a rim.
  */
 const FRAME_SUBMERSION_LIMIT = 0.15;
+
+/** Tallest a label may be relative to the frame it is cut into. */
+const LABEL_MAX_SHARE_OF_FRAME = 0.55;
+
+/** Share of the label that must land on the plaque before it is worth a word. */
+const LABEL_COVERAGE_LIMIT = 0.99;
 
 /**
  * Share of the plate above which contours have stopped being lines. Measured on
@@ -686,6 +693,95 @@ export async function assemble(
             `vertical exaggeration, if you want an unbroken rim.`,
         });
       }
+      // --- F5.1: engrave the label into the frame's top face ---------------
+      //
+      // Subtracted from the FRAME alone, not the whole model. The tool is a few
+      // hundred triangles against a rim of a few dozen, so this stays a
+      // millisecond-scale boolean and works in every colour mode rather than
+      // only the ones that already union everything.
+      const labelText = config.label.text.trim();
+      if (labelText.length > 0) {
+        const capHeight_mm = Math.min(
+          config.label.capHeight_mm,
+          // Never taller than the plaque it sits on.
+          config.frame.width_mm * LABEL_MAX_SHARE_OF_FRAME,
+        );
+        const options = {
+          capHeight_mm,
+          depth_mm: Math.min(config.label.depth_mm, config.frame.height_mm * 0.75),
+          strokeWidth_mm: config.nozzleDiameter_mm,
+          surfaceZ_mm: built.top_mm,
+          // The model is centred on the origin in print space, and the label
+          // sits on the bottom rim, centred in the band's width.
+          centreX_mm: 0,
+          baselineY_mm:
+            -((heightfield.rows - 1) * heightfield.spacingY_m * scale.scale) / 2 +
+            (config.frame.width_mm - capHeight_mm) / 2,
+        };
+
+        const label = buildLabelTool(labelText, options);
+        if (label.missing.length > 0) {
+          warnings.push({
+            level: 'warn',
+            code: 'label-unsupported-characters',
+            message:
+              `The label font has no glyph for ${label.missing.map((c) => `"${c}"`).join(', ')}. ` +
+              `Those characters are left blank. It is a single-stroke engraving font: ` +
+              `A–Z, 0–9 and common punctuation.`,
+          });
+        }
+
+        if (label.mesh.triangles > 0) {
+          const coverage = labelCoverage(labelText, options, built.footprint_mm);
+          if (coverage < LABEL_COVERAGE_LIMIT) {
+            warnings.push({
+              level: 'warn',
+              code: 'label-overruns-frame',
+              message:
+                `Only ${(coverage * 100).toFixed(0)}% of the label lands on the frame — the rest ` +
+                `engraves nothing. It is ${label.width_mm.toFixed(0)} mm wide. Shorten the text, ` +
+                `reduce the label size, or widen the frame.`,
+            });
+          }
+
+          try {
+            const engraved = await subtractParts(
+              frameParts[0],
+              [
+                {
+                  name: 'label',
+                  color: TERRAIN_COLOR,
+                  positions: label.mesh.positions,
+                  indices: label.mesh.indices,
+                  manifold: true,
+                },
+              ],
+              { name: 'frame', color: TERRAIN_COLOR },
+            );
+            frameParts[0] = engraved;
+          } catch (err) {
+            // A frame with no caption beats no model at all.
+            warnings.push({
+              level: 'warn',
+              code: 'label-failed',
+              message:
+                `The label could not be engraved: ` +
+                `${err instanceof BooleanError ? err.userMessage : String(err)}. ` +
+                `The frame was left plain.`,
+            });
+          }
+        }
+
+        if (capHeight_mm < config.label.capHeight_mm) {
+          warnings.push({
+            level: 'warn',
+            code: 'label-shrunk',
+            message:
+              `The label was reduced to ${capHeight_mm.toFixed(1)} mm so it fits inside a ` +
+              `${config.frame.width_mm} mm frame. Widen the frame for larger text.`,
+          });
+        }
+      }
     } else {
       // Almost always a frame wider than the selection is across.
       warnings.push({
@@ -697,6 +793,16 @@ export async function assemble(
       });
     }
     throwIfAborted();
+  } else if (config.frame.enabled === false && config.label.text.trim().length > 0) {
+    // Not a silent no-op: the text was typed and nothing appeared.
+    warnings.push({
+      level: 'warn',
+      code: 'label-needs-frame',
+      message:
+        'The label is engraved into the frame, which is switched off, so nothing was ' +
+        'engraved. Turn Frame on — the base is the underside of the model, and text there ' +
+        'reads backwards.',
+    });
   }
 
   // --- Stage 6: route solids ------------------------------------------------

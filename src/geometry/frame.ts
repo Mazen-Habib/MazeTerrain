@@ -24,7 +24,7 @@
 import { buildRibbonField } from './ribbonField';
 import { clipMultiPolygonToRing } from './clip';
 import { extrudeDraped, type SolidMesh } from './extrude';
-import type { Ring } from './polygons';
+import type { MultiPolygon, Ring } from './polygons';
 import type { ResolvedScale } from './coords';
 
 /** Cells across half the band. Six is what the feature layers use. */
@@ -49,6 +49,14 @@ export interface FrameResult {
   mesh: SolidMesh;
   /** Absolute Z of the frame's top face, print mm. */
   top_mm: number;
+  /**
+   * The band's footprint in PRINT millimetres.
+   *
+   * Returned so the label can ask whether its strokes actually land on the
+   * plaque. Converted here rather than by the caller, because this is the one
+   * place that knows the band is in world metres.
+   */
+  footprint_mm: MultiPolygon;
 }
 
 /**
@@ -60,11 +68,11 @@ export function buildFrame(ring: Ring, options: FrameOptions): FrameResult {
   const top_mm = options.baseThickness_mm + options.height_mm;
 
   if (ring.length < 3 || !(options.width_mm > 0) || !(options.height_mm > 0)) {
-    return { mesh: EMPTY, top_mm };
+    return { mesh: EMPTY, top_mm, footprint_mm: [] };
   }
 
   const width_m = options.width_mm / options.scale.scale;
-  if (!Number.isFinite(width_m) || width_m <= 0) return { mesh: EMPTY, top_mm };
+  if (!Number.isFinite(width_m) || width_m <= 0) return { mesh: EMPTY, top_mm, footprint_mm: [] };
 
   // Closed explicitly: an open polyline would leave the band unmitred at the
   // point where the boundary meets itself.
@@ -80,7 +88,7 @@ export function buildFrame(ring: Ring, options: FrameOptions): FrameResult {
   // distances, so marching squares interpolates it smoothly.
   const band = buildRibbonField([closed], width_m * 2, null, CELLS_PER_HALF_WIDTH);
   const polygons = clipMultiPolygonToRing(band.polygons, ring);
-  if (polygons.length === 0) return { mesh: EMPTY, top_mm };
+  if (polygons.length === 0) return { mesh: EMPTY, top_mm, footprint_mm: [] };
 
   const mesh = extrudeDraped(
     polygons,
@@ -104,7 +112,11 @@ export function buildFrame(ring: Ring, options: FrameOptions): FrameResult {
     },
   );
 
-  return { mesh, top_mm };
+  const footprint_mm: MultiPolygon = polygons.map((polygon) =>
+    polygon.map((ring) => ring.map(([x, y]) => [x * options.scale.scale, y * options.scale.scale] as [number, number])),
+  );
+
+  return { mesh, top_mm, footprint_mm };
 }
 
 /**

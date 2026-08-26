@@ -44,6 +44,7 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     colorMode: 'multicolor',
     contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7 },
     frame: { enabled: false, width_mm: 8, height_mm: 3 },
+    label: { text: '', capHeight_mm: 4, depth_mm: 0.6 },
     cutout: { subMode: 'groove', clearance_mm: 0.15, insetDepth_mm: 1.0, insertProud_mm: 0.4 },
     layers: defaultLayers(),
     ...overrides,

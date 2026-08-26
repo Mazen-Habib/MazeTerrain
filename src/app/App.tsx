@@ -735,6 +735,53 @@ export function App() {
                   onChange={(v) => update({ frame: { ...config.frame, height_mm: v } })}
                   hint="Above the lowest ground. Terrain higher than this stands over the rim."
                 />
+
+                <div className="field">
+                  <label className="field__label" htmlFor="label-text">
+                    Engraved label
+                  </label>
+                  <input
+                    id="label-text"
+                    className="textInput textInput--wide"
+                    placeholder="MARGALLA TRAIL 5"
+                    value={config.label.text}
+                    disabled={busy}
+                    maxLength={64}
+                    onChange={(e) => update({ label: { ...config.label, text: e.target.value } })}
+                  />
+                  <p className="field__hint">
+                    Cut into the frame&rsquo;s top face, along the bottom edge. A single-stroke
+                    engraving font: capitals, digits and common punctuation, so lowercase is
+                    set as capitals.
+                  </p>
+                </div>
+
+                {config.label.text.trim().length > 0 ? (
+                  <>
+                    <NumberField
+                      label="Label size"
+                      unit="mm"
+                      value={config.label.capHeight_mm}
+                      min={1.5}
+                      max={20}
+                      step={0.5}
+                      disabled={busy}
+                      onChange={(v) => update({ label: { ...config.label, capHeight_mm: v } })}
+                      hint="Cap height. Capped at just over half the frame width."
+                    />
+                    <NumberField
+                      label="Label depth"
+                      unit="mm"
+                      value={config.label.depth_mm}
+                      min={0.2}
+                      max={3}
+                      step={0.1}
+                      disabled={busy}
+                      onChange={(v) => update({ label: { ...config.label, depth_mm: v } })}
+                      hint="At least two or three layers, or the groove will not read."
+                    />
+                  </>
+                ) : null}
               </>
             ) : null}
 

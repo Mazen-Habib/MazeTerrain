@@ -140,6 +140,7 @@ export function restoreSettings(raw: unknown): Settings {
   const cutout = isObject(raw.cutout) ? raw.cutout : {};
   const contours = isObject(raw.contours) ? raw.contours : {};
   const frame = isObject(raw.frame) ? raw.frame : {};
+  const label = isObject(raw.label) ? raw.label : {};
   const bed = raw.bedSize_mm;
 
   return {
@@ -174,6 +175,11 @@ export function restoreSettings(raw: unknown): Settings {
       enabled: bool(frame.enabled, base.frame.enabled),
       width_mm: num(frame.width_mm, base.frame.width_mm),
       height_mm: num(frame.height_mm, base.frame.height_mm),
+    },
+    label: {
+      text: str(label.text, base.label.text),
+      capHeight_mm: num(label.capHeight_mm, base.label.capHeight_mm),
+      depth_mm: num(label.depth_mm, base.label.depth_mm),
     },
     layers: restoreLayers(raw.layers),
   };

@@ -160,6 +160,23 @@ export interface FrameSettings {
   height_mm: number;
 }
 
+/**
+ * Text engraved into the frame's top face.
+ *
+ * Into the FRAME, not the base: the spec requires it readable from the top, and
+ * the base is the underside — text there has to be mirrored, which is the trap
+ * at docs/08-pitfalls.md#engraved-text-mirrored. A label therefore needs the
+ * frame switched on, and `assemble` says so rather than building nothing.
+ */
+export interface LabelSettings {
+  /** Empty means no label. Upper-cased when engraved; the font is caps only. */
+  text: string;
+  /** Height of a capital letter, print mm. */
+  capHeight_mm: number;
+  /** How deep the groove cuts, print mm. */
+  depth_mm: number;
+}
+
 export interface GenerateConfig {
   bbox: BBox;
   dataset: string;
@@ -196,6 +213,8 @@ export interface GenerateConfig {
   contours: ContourSettings;
   /** docs/02-feature-spec.md F5. */
   frame: FrameSettings;
+  /** docs/02-feature-spec.md F5.1. */
+  label: LabelSettings;
   /**
    * The printer's horizontal resolution limit. Not decoration either: it is the
    * floor on the terrain sampling step, because sampling finer than the nozzle
