@@ -124,6 +124,20 @@ export interface CutoutSettings {
   insertProud_mm: number;
 }
 
+/**
+ * Raised rings at fixed elevation steps.
+ *
+ * Off by default, and most valuable in the single-colour modes: a monochrome
+ * terrain has only its silhouette to read relief by.
+ */
+export interface ContourSettings {
+  enabled: boolean;
+  /** Elevation step between rings, in real metres. */
+  interval_m: number;
+  /** How far a ring stands above the terrain, print mm. */
+  lineHeight_mm: number;
+}
+
 export interface GenerateConfig {
   bbox: BBox;
   dataset: string;
@@ -156,6 +170,8 @@ export interface GenerateConfig {
   /** docs/02-feature-spec.md F6. */
   colorMode: ColorMode;
   cutout: CutoutSettings;
+  /** docs/02-feature-spec.md F3.1. */
+  contours: ContourSettings;
   /**
    * The printer's horizontal resolution limit. Not decoration either: it is the
    * floor on the terrain sampling step, because sampling finer than the nozzle

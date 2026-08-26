@@ -10,13 +10,16 @@ import { buildMosaic, TileFetchError } from '../data/dem/fetchTiles';
 import { getDataset } from '../data/dem/datasets';
 import { inpaintNoData } from '../data/dem/sampler';
 import { chooseZoom, tileRangeForBBox } from '../data/dem/tiles';
-import { resolveGrid, resolveScale } from './coords';
-import { buildHeightfield, smoothHeightfield } from './heightfield';
+import { resolveGrid, resolveScale, worldToPrint } from './coords';
+import { buildHeightfield, sampleHeightfieldAt, smoothHeightfield } from './heightfield';
 import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
 import { findFloatingVertices, repairAndValidate, validateMesh } from './validate';
 import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
+import { traceContours } from './contours';
+import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
+import { extrudeDraped } from './extrude';
 import {
   buildLineLayer,
   buildPolygonLayer,
@@ -477,6 +480,87 @@ export async function assemble(
     }
   }
 
+  // --- Stage 5b: contour lines (docs/02-feature-spec.md F3.1) ---------------
+  //
+  // Traced as centrelines and then built by the same ribbon-and-drape path the
+  // road layers use, so they inherit its fixes rather than repeating them.
+  const contourParts: MeshPart[] = [];
+  if (config.contours.enabled) {
+    report({
+      stage: 'building-features',
+      percent: FEATURES_END,
+      detail: `Tracing contours every ${config.contours.interval_m} m`,
+    });
+
+    const traced = traceContours(heightfield, config.contours.interval_m);
+    if (traced.lines.length === 0) {
+      warnings.push({
+        level: 'warn',
+        code: 'contours-empty',
+        message:
+          `No contours at ${config.contours.interval_m} m — this area only spans ` +
+          `${(heightfield.max_m - heightfield.min_m).toFixed(0)} m. Reduce the interval.`,
+      });
+    } else {
+      // One nozzle wide: a contour is a hairline by nature, and anything wider
+      // reads as a terrace rather than a line.
+      const width_m = config.nozzleDiameter_mm / scale.scale;
+      const ribbon = buildRibbonField(
+        traced.lines,
+        width_m,
+        featureClip,
+        FEATURE_CELLS_PER_HALF_WIDTH,
+      );
+      if (ribbon.polygons.length > 0) {
+        const height_mm = Math.max(0.1, config.contours.lineHeight_mm);
+        const mesh = extrudeDraped(
+          ribbon.polygons,
+          (x_m, y_m) =>
+            worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2],
+          (x_m, y_m) => [x_m * scale.scale, y_m * scale.scale],
+          {
+            height_mm,
+            penetration_mm: Math.max(1.0, height_mm * 0.5),
+            minBottom_mm: Math.min(0.2, config.baseThickness_mm / 2),
+            maxEdge_m: Math.max(heightfield.spacingX_m, width_m),
+          },
+        );
+        if (mesh.triangles > 0) {
+          contourParts.push({
+            name: 'contours',
+            color: TERRAIN_COLOR,
+            positions: mesh.positions,
+            indices: mesh.indices,
+            manifold: true,
+          });
+        }
+      }
+      // Rings this close together merge into a staircase rather than reading as
+      // separate lines, and they cost more geometry than the terrain does.
+      const relief_mm = scale.zScale * (heightfield.max_m - heightfield.min_m);
+      const spacing_mm = relief_mm / Math.max(1, traced.levels.length);
+      if (traced.levels.length > 30 || spacing_mm < config.nozzleDiameter_mm * 3) {
+        const suggested =
+          Math.ceil((heightfield.max_m - heightfield.min_m) / 20 / 5) * 5;
+        warnings.push({
+          level: 'warn',
+          code: 'contours-crowded',
+          message:
+            `${traced.levels.length} contour rings at ${config.contours.interval_m} m, ` +
+            `about ${spacing_mm.toFixed(2)} mm apart vertically. On steep ground they will ` +
+            `merge into a staircase. Try an interval of about ${suggested} m.`,
+        });
+      }
+
+      report({
+        stage: 'building-features',
+        percent: FEATURES_END,
+        detail: `${traced.levels.length} contour level(s)`,
+      });
+    }
+    throwIfAborted();
+  }
+
   // --- Stage 6: route solids ------------------------------------------------
   const visibleRoutes = routes.filter((r) => r.style.visible);
   const routeParts: MeshPart[] = [];
@@ -663,7 +747,7 @@ export async function assemble(
   // Each route is validated as its own closed solid. In multicolour mode the
   // parts stay separate and overlaps are expected — the route deliberately
   // penetrates the terrain (docs/05-geometry-pipeline.md Stage 7).
-  for (const part of [...featureParts, ...routeParts]) {
+  for (const part of [...featureParts, ...contourParts, ...routeParts]) {
     // Feature layers are a MERGE of many closed solids that legitimately touch
     // at junctions. Welding them would fuse those solids into edges with four
     // adjacent faces and report a non-manifold layer that is nothing of the
@@ -731,7 +815,7 @@ export async function assemble(
     manifold: validation.manifold,
   };
 
-  let parts = [terrainPart, ...featureParts, ...routeParts];
+  let parts = [terrainPart, ...featureParts, ...contourParts, ...routeParts];
 
   // Anything draped should sit within its own height of the ground. When it
   // does not it shows as a cone or blade standing out of the model, and every
@@ -777,7 +861,7 @@ export async function assemble(
         ];
       } else {
         // Everything except the routes is the body; the routes become the tool.
-        const body = [terrainPart, ...featureParts];
+        const body = [terrainPart, ...featureParts, ...contourParts];
         const base =
           body.length === 1
             ? body[0]
@@ -815,7 +899,7 @@ export async function assemble(
               `${err instanceof Error ? err.message : String(err)}. ` +
               `The model was left as separate parts instead.`,
       });
-      parts = [terrainPart, ...featureParts, ...routeParts];
+      parts = [terrainPart, ...featureParts, ...contourParts, ...routeParts];
     }
   }
 

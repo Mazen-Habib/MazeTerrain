@@ -642,6 +642,57 @@ export function App() {
             </div>
 
             <div className="field">
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={config.contours.enabled}
+                  disabled={busy}
+                  onChange={(e) =>
+                    update({ contours: { ...config.contours, enabled: e.target.checked } })
+                  }
+                />
+                Contour lines
+              </label>
+              <p className="field__hint">
+                Raised rings at fixed heights. Most useful in the single-colour modes, where
+                relief is otherwise only readable from the silhouette.
+              </p>
+            </div>
+
+            {config.contours.enabled ? (
+              <>
+                <NumberField
+                  label="Contour interval"
+                  unit="m"
+                  value={config.contours.interval_m}
+                  min={5}
+                  max={500}
+                  step={5}
+                  disabled={busy}
+                  onChange={(v) => update({ contours: { ...config.contours, interval_m: v } })}
+                  hint={
+                    bundle
+                      ? `This area spans ${(
+                          bundle.stats.elevationRange_m[1] - bundle.stats.elevationRange_m[0]
+                        ).toFixed(0)} m.`
+                      : 'Real metres of elevation between rings.'
+                  }
+                />
+                <NumberField
+                  label="Contour height"
+                  unit="mm"
+                  value={config.contours.lineHeight_mm}
+                  min={0.2}
+                  max={3}
+                  step={0.1}
+                  disabled={busy}
+                  onChange={(v) => update({ contours: { ...config.contours, lineHeight_mm: v } })}
+                  hint="How far each ring stands above the terrain."
+                />
+              </>
+            ) : null}
+
+            <div className="field">
               <label className="field__label" htmlFor="colormode">
                 Colour mode
               </label>
