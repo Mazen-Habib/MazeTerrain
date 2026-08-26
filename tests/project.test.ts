@@ -243,37 +243,82 @@ describe('share link', () => {
 describe('named presets', () => {
   beforeEach(() => localStorage.clear());
 
-  it('saves, lists and deletes', () => {
+  /** The user's own, ignoring whatever ships with the app. */
+  const mine = () => listPresets().filter((p) => !p.builtIn);
+
+  it('ships a curated set, so the dropdown is never empty', () => {
+    const built = listPresets().filter((p) => p.builtIn);
+    expect(built.length).toBeGreaterThan(0);
+    expect(built.map((p) => p.name)).toContain('Gift — 100 mm');
+    // Every one has to be a settings object the builder would accept.
+    for (const p of built) expect(p.settings).toEqual(restoreSettings(p.settings));
+  });
+
+  it('carries no area with a built-in, so it can be applied anywhere', () => {
+    for (const p of listPresets()) expect(p.settings).not.toHaveProperty('bbox');
+  });
+
+  it('saves, lists and deletes the users own', () => {
     savePreset('Gift 100 mm', { ...settings(), modelWidth_mm: 100 });
     savePreset('Wall piece', { ...settings(), modelWidth_mm: 300 });
 
-    const all = listPresets();
-    expect(all.map((p) => p.name)).toEqual(['Gift 100 mm', 'Wall piece']);
-    expect(all[1].settings.modelWidth_mm).toBe(300);
+    expect(mine().map((p) => p.name)).toEqual(['Gift 100 mm', 'Wall piece']);
+    expect(mine()[1].settings.modelWidth_mm).toBe(300);
 
-    expect(deletePreset('Wall piece').map((p) => p.name)).toEqual(['Gift 100 mm']);
+    deletePreset('Wall piece');
+    expect(mine().map((p) => p.name)).toEqual(['Gift 100 mm']);
+  });
+
+  it('lists the built-ins first', () => {
+    savePreset('AAA mine', settings());
+    const all = listPresets();
+    const lastBuiltIn = all.map((p) => Boolean(p.builtIn)).lastIndexOf(true);
+    const firstOwn = all.map((p) => Boolean(p.builtIn)).indexOf(false);
+    expect(lastBuiltIn).toBeLessThan(firstOwn);
   });
 
   it('updates rather than duplicating when the name is reused', () => {
     savePreset('Gift', { ...settings(), modelWidth_mm: 100 });
-    const after = savePreset('Gift', { ...settings(), modelWidth_mm: 120 });
+    savePreset('Gift', { ...settings(), modelWidth_mm: 120 });
 
-    expect(after).toHaveLength(1);
-    expect(after[0].settings.modelWidth_mm).toBe(120);
+    expect(mine()).toHaveLength(1);
+    expect(mine()[0].settings.modelWidth_mm).toBe(120);
+  });
+
+  /**
+   * Saving over a built-in's name has to leave ONE entry under that name, or
+   * the dropdown shows two and neither says which is about to be applied.
+   */
+  it('shadows a built-in rather than showing both', () => {
+    const name = 'Gift — 100 mm';
+    savePreset(name, { ...settings(), modelWidth_mm: 42 });
+
+    const matching = listPresets().filter((p) => p.name === name);
+    expect(matching).toHaveLength(1);
+    expect(matching[0].builtIn).toBeFalsy();
+    expect(matching[0].settings.modelWidth_mm).toBe(42);
+  });
+
+  it('restores the built-in when its shadow is deleted', () => {
+    const name = 'Gift — 100 mm';
+    const original = listPresets().find((p) => p.name === name)?.settings.modelWidth_mm;
+
+    savePreset(name, { ...settings(), modelWidth_mm: 42 });
+    deletePreset(name);
+
+    const back = listPresets().find((p) => p.name === name);
+    expect(back?.builtIn).toBe(true);
+    expect(back?.settings.modelWidth_mm).toBe(original);
   });
 
   it('ignores a blank name', () => {
-    expect(savePreset('   ', settings())).toHaveLength(0);
-  });
-
-  /** A preset must survive being applied to a different place. */
-  it('carries no selection with it', () => {
-    savePreset('Gift', settings());
-    expect(listPresets()[0].settings).not.toHaveProperty('bbox');
+    savePreset('   ', settings());
+    expect(mine()).toHaveLength(0);
   });
 
   it('survives junk in storage rather than taking the app down', () => {
     localStorage.setItem('mazeterrain.presets.v1', '{ not json');
-    expect(listPresets()).toEqual([]);
+    expect(mine()).toEqual([]);
+    expect(listPresets().length).toBeGreaterThan(0);
   });
 });

@@ -103,6 +103,7 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
     bedSize_mm: [256, 256],
     colorMode: 'multicolor',
     contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7 },
+    frame: { enabled: false, width_mm: 8, height_mm: 3 },
     cutout: {
       subMode: 'groove',
       // 0.15 mm per side is the standard FDM press-fit starting point.

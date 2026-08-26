@@ -145,6 +145,21 @@ export interface ContourSettings {
   lineHeight_mm: number;
 }
 
+/**
+ * A flat-topped rim around the inside of the model's boundary.
+ *
+ * One control, not two: OPEN-QUESTIONS Q15 (resolved 2026-08-27) struck the
+ * separate "brim", because a brim is a bed-adhesion setting that belongs to the
+ * slicer and a narrow frame is the decorative lip the spec wanted.
+ */
+export interface FrameSettings {
+  enabled: boolean;
+  /** Band width, print mm. Narrow reads as an edge lip, wide as a picture frame. */
+  width_mm: number;
+  /** How far the top face stands above the lowest ground, print mm. */
+  height_mm: number;
+}
+
 export interface GenerateConfig {
   bbox: BBox;
   dataset: string;
@@ -179,6 +194,8 @@ export interface GenerateConfig {
   cutout: CutoutSettings;
   /** docs/02-feature-spec.md F3.1. */
   contours: ContourSettings;
+  /** docs/02-feature-spec.md F5. */
+  frame: FrameSettings;
   /**
    * The printer's horizontal resolution limit. Not decoration either: it is the
    * floor on the terrain sampling step, because sampling finer than the nozzle

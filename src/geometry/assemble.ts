@@ -18,6 +18,7 @@ import { findFloatingVertices, repairAndValidate, validateMesh } from './validat
 import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
 import { traceContours, suggestInterval } from './contours';
+import { buildFrame, frameSubmersion } from './frame';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
 import type { MultiPolygon } from './polygons';
 import { extrudeDraped } from './extrude';
@@ -108,6 +109,13 @@ function footprintArea_mm2(polygons: MultiPolygon, scale_mm_per_m: number): numb
  * bottom off whatever it crosses.
  */
 const CUT_TOOL_HEADROOM_MM = 5;
+
+/**
+ * Share of the boundary the terrain may stand over before the frame is worth a
+ * word. A peak that happens to touch the edge is not a problem; a rim buried
+ * along a third of its length is not a rim.
+ */
+const FRAME_SUBMERSION_LIMIT = 0.15;
 
 /**
  * Share of the plate above which contours have stopped being lines. Measured on
@@ -632,6 +640,65 @@ export async function assemble(
     throwIfAborted();
   }
 
+  // --- Stage 5c: frame (docs/02-feature-spec.md F5) -------------------------
+  const frameParts: MeshPart[] = [];
+  if (config.frame.enabled) {
+    report({
+      stage: 'building-features',
+      percent: FEATURES_END,
+      detail: `Framing the model, ${config.frame.width_mm} mm`,
+    });
+
+    const built = buildFrame(featureClip, {
+      width_mm: config.frame.width_mm,
+      height_mm: config.frame.height_mm,
+      baseThickness_mm: config.baseThickness_mm,
+      scale,
+    });
+
+    if (built.mesh.triangles > 0) {
+      frameParts.push({
+        name: 'frame',
+        color: TERRAIN_COLOR,
+        positions: built.mesh.positions,
+        indices: built.mesh.indices,
+        manifold: true,
+      });
+
+      // A frame the ground stands over is not a frame. Sampled on the boundary
+      // itself, which is where the two meet.
+      const submerged = frameSubmersion(
+        featureClip,
+        (x_m, y_m) => worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2],
+        built.top_mm,
+        // One terrain cell: finer buys nothing, because the ground between two
+        // samples was interpolated from them in the first place.
+        heightfield.spacingX_m,
+      );
+      if (submerged.fraction > FRAME_SUBMERSION_LIMIT) {
+        warnings.push({
+          level: 'warn',
+          code: 'frame-submerged',
+          message:
+            `The terrain stands over the frame along ${(submerged.fraction * 100).toFixed(0)}% ` +
+            `of the edge, by up to ${submerged.worst_mm.toFixed(1)} mm. Raise the frame to about ` +
+            `${(config.frame.height_mm + submerged.worst_mm).toFixed(1)} mm, or lower the ` +
+            `vertical exaggeration, if you want an unbroken rim.`,
+        });
+      }
+    } else {
+      // Almost always a frame wider than the selection is across.
+      warnings.push({
+        level: 'warn',
+        code: 'frame-empty',
+        message:
+          `No frame was built at ${config.frame.width_mm} mm wide. That is probably wider ` +
+          `than half the model — try a narrower frame.`,
+      });
+    }
+    throwIfAborted();
+  }
+
   // --- Stage 6: route solids ------------------------------------------------
   //
   // A cutting tool has to enclose everything the channel passes through. The
@@ -639,7 +706,7 @@ export async function assemble(
   // proud of the ground by amounts that depend on the data, so the only safe
   // ceiling is the top of what has actually been built.
   let bodyTop_mm = -Infinity;
-  for (const part of [mesh, ...featureParts, ...contourParts]) {
+  for (const part of [mesh, ...featureParts, ...contourParts, ...frameParts]) {
     const positions = part.positions;
     for (let i = 2; i < positions.length; i += 3) {
       if (positions[i] > bodyTop_mm) bodyTop_mm = positions[i];
@@ -829,7 +896,7 @@ export async function assemble(
   // Each route is validated as its own closed solid. In multicolour mode the
   // parts stay separate and overlaps are expected — the route deliberately
   // penetrates the terrain (docs/05-geometry-pipeline.md Stage 7).
-  for (const part of [...featureParts, ...contourParts, ...routeParts]) {
+  for (const part of [...featureParts, ...contourParts, ...frameParts, ...routeParts]) {
     // Feature layers are a MERGE of many closed solids that legitimately touch
     // at junctions. Welding them would fuse those solids into edges with four
     // adjacent faces and report a non-manifold layer that is nothing of the
@@ -897,7 +964,7 @@ export async function assemble(
     manifold: validation.manifold,
   };
 
-  let parts = [terrainPart, ...featureParts, ...contourParts, ...routeParts];
+  let parts = [terrainPart, ...featureParts, ...contourParts, ...frameParts, ...routeParts];
 
   // Anything draped should sit within its own height of the ground. When it
   // does not it shows as a cone or blade standing out of the model, and every
@@ -948,7 +1015,7 @@ export async function assemble(
         ];
       } else {
         // Everything except the routes is the body; the routes become the tool.
-        const body = [terrainPart, ...featureParts, ...contourParts];
+        const body = [terrainPart, ...featureParts, ...contourParts, ...frameParts];
         const base =
           body.length === 1
             ? body[0]
@@ -986,7 +1053,7 @@ export async function assemble(
               `${err instanceof Error ? err.message : String(err)}. ` +
               `The model was left as separate parts instead.`,
       });
-      parts = [terrainPart, ...featureParts, ...contourParts, ...routeParts];
+      parts = [terrainPart, ...featureParts, ...contourParts, ...frameParts, ...routeParts];
     }
   }
 
@@ -997,14 +1064,22 @@ export async function assemble(
     vertices += part.positions.length / 3;
   }
 
-  warnings.push(...printChecks(config, mesh.dimensions_mm, triangles));
+  // Measured over every part, not the terrain alone.
+  //
+  // The terrain's own extent is not the model's: a frame, a raised route and a
+  // proud insert all stand above it, and an insert prints beside it. Reporting
+  // the terrain's height understated what actually goes on the bed — silently,
+  // and by exactly the amount the user had just dialled in.
+  const dimensions_mm = boundsOfParts(parts) ?? mesh.dimensions_mm;
+
+  warnings.push(...printChecks(config, dimensions_mm, triangles));
 
   const bundle: MeshBundle = {
     parts,
     stats: {
       triangles,
       vertices,
-      dimensions_mm: mesh.dimensions_mm,
+      dimensions_mm,
       extent_km: [scale.extentX_m / 1000, scale.extentY_m / 1000],
       elevationRange_m: [heightfield.min_m, heightfield.max_m],
       watertight: validation.watertight,
@@ -1021,6 +1096,25 @@ export async function assemble(
 
   report({ stage: 'done', percent: 100, detail: 'Done' });
   return bundle;
+}
+
+/** Width, depth and height across every part, print mm. Null if there is nothing. */
+function boundsOfParts(parts: MeshPart[]): [number, number, number] | null {
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+
+  for (const part of parts) {
+    const p = part.positions;
+    for (let i = 0; i < p.length; i += 3) {
+      for (let a = 0; a < 3; a++) {
+        if (p[i + a] < lo[a]) lo[a] = p[i + a];
+        if (p[i + a] > hi[a]) hi[a] = p[i + a];
+      }
+    }
+  }
+
+  if (!Number.isFinite(lo[0])) return null;
+  return [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
 }
 
 function countDegenerates(part: MeshPart): number {

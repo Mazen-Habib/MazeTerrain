@@ -695,6 +695,49 @@ export function App() {
               onChange={(v) => update({ modelWidth_mm: v })}
               hint="Longest edge of the printed model."
             />
+            <div className="field">
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={config.frame.enabled}
+                  disabled={busy}
+                  onChange={(e) => update({ frame: { ...config.frame, enabled: e.target.checked } })}
+                />
+                Frame
+              </label>
+              <p className="field__hint">
+                A flat-topped rim round the inside of the edge. Narrow reads as a lip;
+                wide gives a picture frame with room for a plaque.
+              </p>
+            </div>
+
+            {config.frame.enabled ? (
+              <>
+                <NumberField
+                  label="Frame width"
+                  unit="mm"
+                  value={config.frame.width_mm}
+                  min={2}
+                  max={30}
+                  step={0.5}
+                  disabled={busy}
+                  onChange={(v) => update({ frame: { ...config.frame, width_mm: v } })}
+                  hint={`Taken out of the ${config.modelWidth_mm} mm, not added to it, so the model stays the size you asked for.`}
+                />
+                <NumberField
+                  label="Frame height"
+                  unit="mm"
+                  value={config.frame.height_mm}
+                  min={1}
+                  max={15}
+                  step={0.5}
+                  disabled={busy}
+                  onChange={(v) => update({ frame: { ...config.frame, height_mm: v } })}
+                  hint="Above the lowest ground. Terrain higher than this stands over the rim."
+                />
+              </>
+            ) : null}
+
             <NumberField
               label="Base thickness"
               unit="mm"

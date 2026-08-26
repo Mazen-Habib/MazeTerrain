@@ -139,6 +139,7 @@ export function restoreSettings(raw: unknown): Settings {
 
   const cutout = isObject(raw.cutout) ? raw.cutout : {};
   const contours = isObject(raw.contours) ? raw.contours : {};
+  const frame = isObject(raw.frame) ? raw.frame : {};
   const bed = raw.bedSize_mm;
 
   return {
@@ -168,6 +169,11 @@ export function restoreSettings(raw: unknown): Settings {
       enabled: bool(contours.enabled, base.contours.enabled),
       interval_m: numOrAuto(contours.interval_m, base.contours.interval_m),
       lineHeight_mm: num(contours.lineHeight_mm, base.contours.lineHeight_mm),
+    },
+    frame: {
+      enabled: bool(frame.enabled, base.frame.enabled),
+      width_mm: num(frame.width_mm, base.frame.width_mm),
+      height_mm: num(frame.height_mm, base.frame.height_mm),
     },
     layers: restoreLayers(raw.layers),
   };
@@ -408,6 +414,64 @@ const PRESET_KEY = 'mazeterrain.presets.v1';
 export interface NamedPreset {
   name: string;
   settings: Settings;
+  /** Shipped with the app: shown first, and not editable or deletable. */
+  builtIn?: boolean;
+}
+
+/**
+ * Curated presets (OPEN-QUESTIONS Q16, resolved 2026-08-27: yes).
+ *
+ * An empty dropdown teaches nobody what presets are for. Each of these is a
+ * plausible finished intent rather than a demonstration of a slider — a size,
+ * an exaggeration and a nozzle that go together — so picking one gets a usable
+ * model rather than a starting point to fix.
+ *
+ * Settings only. A preset carries no area and no route, so it survives being
+ * applied anywhere.
+ */
+function curatedPresets(): NamedPreset[] {
+  const { bbox: _bbox, ...base } = defaultConfig({ west: 0, south: 0, east: 1, north: 1 });
+
+  const make = (name: string, patch: Partial<Settings>): NamedPreset => ({
+    name,
+    builtIn: true,
+    settings: { ...base, ...patch },
+  });
+
+  return [
+    make('Gift — 100 mm', {
+      modelWidth_mm: 100,
+      baseThickness_mm: 3,
+      verticalExaggeration: 1.5,
+    }),
+    make('Wall piece — 300 mm', {
+      modelWidth_mm: 300,
+      baseThickness_mm: 4,
+      verticalExaggeration: 1.25,
+      // Wide enough to carry a plaque at this size.
+      frame: { enabled: true, width_mm: 12, height_mm: 4 },
+    }),
+    make('Alpine climb', {
+      modelWidth_mm: 150,
+      // Real alpine relief needs no help; past this it reads as a spike field.
+      verticalExaggeration: 1.25,
+      contours: { enabled: true, interval_m: 'auto', lineHeight_mm: 0.6 },
+    }),
+    make('Flat city map', {
+      modelWidth_mm: 150,
+      // Nothing to see in the relief, so the streets carry the model.
+      verticalExaggeration: 3,
+      baseThickness_mm: 2.5,
+      contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7 },
+    }),
+    make('Single colour, route inlaid', {
+      modelWidth_mm: 120,
+      colorMode: 'single-cutout',
+      cutout: { subMode: 'inlay', clearance_mm: 0.15, insetDepth_mm: 1, insertProud_mm: 0.6 },
+      // Relief is otherwise only readable from the silhouette in one colour.
+      contours: { enabled: true, interval_m: 'auto', lineHeight_mm: 0.6 },
+    }),
+  ];
 }
 
 /**
@@ -418,6 +482,16 @@ export interface NamedPreset {
  * make every preset teleport the user somewhere else.
  */
 export function listPresets(): NamedPreset[] {
+  const built = curatedPresets();
+  const mine = readOwnPresets();
+  // A saved preset under a built-in's name shadows it, rather than appearing
+  // twice with no way to tell which one is about to be applied.
+  const shadowed = new Set(mine.map((p) => p.name));
+  return [...built.filter((p) => !shadowed.has(p.name)), ...mine];
+}
+
+/** Only the user's own, which are the only ones that can be written. */
+function readOwnPresets(): NamedPreset[] {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(PRESET_KEY) ?? '[]');
     if (!Array.isArray(raw)) return [];
@@ -436,16 +510,19 @@ export function savePreset(name: string, settings: Settings): NamedPreset[] {
   if (trimmed.length === 0) return listPresets();
 
   // Same name replaces, so saving twice is an update rather than a duplicate.
-  const next = [...listPresets().filter((p) => p.name !== trimmed), { name: trimmed, settings }];
+  const next = [...readOwnPresets().filter((p) => p.name !== trimmed), { name: trimmed, settings }];
   next.sort((a, b) => a.name.localeCompare(b.name));
   writePresets(next);
-  return next;
+  return listPresets();
 }
 
+/**
+ * Deleting a built-in restores it rather than removing it: what is actually
+ * stored is the user's own copy, and dropping that uncovers the original.
+ */
 export function deletePreset(name: string): NamedPreset[] {
-  const next = listPresets().filter((p) => p.name !== name);
-  writePresets(next);
-  return next;
+  writePresets(readOwnPresets().filter((p) => p.name !== name));
+  return listPresets();
 }
 
 function writePresets(presets: NamedPreset[]): void {

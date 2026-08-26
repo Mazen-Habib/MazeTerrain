@@ -129,23 +129,24 @@ for route distance.
 user-locale for distances.
 **Status:** open
 
-### Q15 — "Brim" naming collision
-Our "Brim" (a decorative raised lip) collides with the slicer meaning (a bed-adhesion
-skirt). Users will be confused.
-**Proposal:** rename to "Edge lip" or fold into "Frame".
-**Status:** open · flagged in `docs/10-glossary.md`
-
-### Q16 — Preset library
-Should we ship curated presets ("Gift 100 mm", "Wall piece 300 mm", "Flat city map",
-"Alpine climb")? Both Type II and our spec have a preset dropdown, but an empty one is
-useless.
-**Status:** open · low cost, probably yes
-
 ---
 
 ## Resolved
 
 *(Move items here with the decision and date when they're settled.)*
+
+### Q15 — "Brim" naming collision — **resolved 2026-08-27**
+There is no brim in MazeTerrain. The owner: "Leave brim that is to be selected in slicer.
+We can use frame." A bed-adhesion brim is a slicer setting and belongs to the person
+slicing; duplicating the word for a decorative lip would only confuse them. The two
+specced controls collapse into one **Frame** with width and height — narrow gives the lip,
+wide gives the picture frame with room for a plaque, and the geometry was identical either
+way. `brimEnabled` / `brimWidth_mm` are struck from F5.
+
+### Q16 — Preset library — **resolved 2026-08-27**
+Yes, ship a curated set. An empty dropdown teaches nobody what presets are for. Built-ins
+are listed above the user's own and cannot be edited or deleted; saving over a built-in
+name creates a personal preset that shadows it.
 
 ### R1 — Route width unit — **resolved 2026-08-17**
 Print millimetres, not world metres. Map2Model uses mm; TerraPrinter uses metres and the
