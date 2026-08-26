@@ -108,7 +108,9 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
       // 0.15 mm per side is the standard FDM press-fit starting point.
       clearance_mm: 0.15,
       insetDepth_mm: 1.0,
-      insertProud_mm: 0.4,
+      // Flush by default: the insert drops in and the surface reads as one
+      // piece. Raising it is the route's Height control, under Routes.
+      insertProud_mm: 0,
     },
     layers: defaultLayers(),
   };

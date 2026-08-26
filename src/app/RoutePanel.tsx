@@ -5,7 +5,7 @@
  * gain and a tiny sparkline profile per route, not just point counts."
  */
 import { useRef, useState } from 'react';
-import type { ColorMode } from '../geometry/types';
+import type { ColorMode, CutoutSubMode } from '../geometry/types';
 import type { Route } from '../data/gpx/types';
 import { NumberField } from './NumberField';
 
@@ -15,11 +15,17 @@ interface RoutePanelProps {
   /**
    * The colour mode in force.
    *
-   * A cut-out model has no raised route to give a height to — the route becomes
-   * a channel, and how far the insert stands proud is a cutout setting. Showing
-   * a live Height control there is a lie: it moves and nothing happens.
+   * In a cut-out model the route is a channel, not a ridge, so Height means
+   * something different: how far the insert stands out of that channel once
+   * seated. The control stays live and keeps driving the shape of the printed
+   * route — it just drives `insertProud_mm` instead of `style.height_mm`.
    */
   colorMode: ColorMode;
+  /** Cut-out sub-mode, so an insert-less groove hides the control entirely. */
+  cutoutSubMode: CutoutSubMode;
+  /** How far the insert stands proud, shared by every route. */
+  insertProud_mm: number;
+  onInsertProudChange: (value: number) => void;
   onUpload: (files: FileList | null) => void;
   onUpdate: (id: string, patch: Partial<Route['style']>) => void;
   onRemove: (id: string) => void;
@@ -30,12 +36,16 @@ export function RoutePanel({
   routes,
   busy,
   colorMode,
+  cutoutSubMode,
+  insertProud_mm,
+  onInsertProudChange,
   onUpload,
   onUpdate,
   onRemove,
   onFit,
 }: RoutePanelProps) {
   const cutout = colorMode === 'single-cutout';
+  const inlay = cutout && cutoutSubMode === 'inlay';
   const input = useRef<HTMLInputElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -163,23 +173,52 @@ export function RoutePanel({
                 onChange={(v) => onUpdate(selected.id, { width_mm: v })}
                 hint="Print millimetres, not real-world metres."
               />
-              <NumberField
-                label="Height"
-                unit="mm"
-                value={selected.style.height_mm}
-                min={0.2}
-                max={6}
-                step={0.1}
-                disabled={busy || cutout}
-                onChange={(v) => onUpdate(selected.id, { height_mm: v })}
-                {...(cutout
-                  ? {
-                      hint:
-                        'Not used in cut-out mode: the route is a channel, not a ridge. ' +
-                        'Use "Insert proud" under Colour mode for how far the insert stands.',
-                    }
-                  : {})}
-              />
+              {inlay ? (
+                <NumberField
+                  label="Height"
+                  unit="mm"
+                  value={insertProud_mm}
+                  min={0}
+                  max={6}
+                  step={0.1}
+                  disabled={busy}
+                  onChange={onInsertProudChange}
+                  hint={
+                    insertProud_mm === 0
+                      ? 'Zero sits the insert flush with the terrain. Raise it and the route ' +
+                        'stands out of the model, which reads far better in one colour. ' +
+                        'Applies to every insert.'
+                      : `The insert stands ${insertProud_mm.toFixed(1)} mm out of the channel. ` +
+                        'Set it to 0 for a flush fit. Applies to every insert.'
+                  }
+                />
+              ) : cutout ? (
+                <NumberField
+                  label="Height"
+                  unit="mm"
+                  value={selected.style.height_mm}
+                  min={0.2}
+                  max={6}
+                  step={0.1}
+                  disabled
+                  onChange={(v) => onUpdate(selected.id, { height_mm: v })}
+                  hint={
+                    'A groove has nothing to stand proud — it is a channel to paint or fill. ' +
+                    'Switch Cutout style to Inlay to print a route that rises out of the model.'
+                  }
+                />
+              ) : (
+                <NumberField
+                  label="Height"
+                  unit="mm"
+                  value={selected.style.height_mm}
+                  min={0.2}
+                  max={6}
+                  step={0.1}
+                  disabled={busy}
+                  onChange={(v) => onUpdate(selected.id, { height_mm: v })}
+                />
+              )}
 
               <div className="field">
                 <label className="field__label" htmlFor="route-elev">

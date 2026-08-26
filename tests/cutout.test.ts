@@ -116,6 +116,89 @@ describe('cut tool', () => {
     });
     expect(zRange(deeper.mesh.positions)[0]).toBeLessThan(zRange(tool.mesh.positions)[0]);
   });
+
+  /**
+   * docs/08-pitfalls.md#the-channel-decapitates-what-it-crosses
+   *
+   * A tool whose top drapes the terrain stops a fixed distance above the
+   * ground, so anything standing taller keeps the part of itself above the tool
+   * and is left hanging once its base is cut away. Measured on a 9.2 km city
+   * model: roads reached 1.08 mm and buildings 1.20 mm above the ground while
+   * the tool stopped at 1.00 mm, and the subtract freed 159 detached pieces.
+   */
+  it('tops out at one flat plane above everything, not a fixed height above the ground', () => {
+    const top_mm = 40;
+    const flat = buildRouteSolid(routeAcross(), {
+      ...common,
+      cut: { kind: 'cut', depth_mm: 1, proud_mm: 1, toolTop_mm: top_mm },
+    });
+
+    const [lo, hi] = zRange(flat.mesh.positions);
+    expect(hi).toBeCloseTo(top_mm, 4);
+    // Well clear of the draped tool, which follows the climbing terrain.
+    expect(hi).toBeGreaterThan(zRange(tool.mesh.positions)[1]);
+    // The floor is untouched: only the top is flattened.
+    expect(lo).toBeCloseTo(zRange(tool.mesh.positions)[0], 4);
+
+    const v = validateMesh(flat.mesh.positions, flat.mesh.indices);
+    expect(v.openEdges).toBe(0);
+    expect(v.nonManifoldEdges).toBe(0);
+  });
+
+  it('leaves the insert draped — only the cutting tool gets a flat top', () => {
+    const insert = buildRouteSolid(routeAcross(), {
+      ...common,
+      cut: { kind: 'insert', depth_mm: 1, proud_mm: 0.4, clearance_mm: 0.15, toolTop_mm: 40 },
+    });
+    expect(zRange(insert.mesh.positions)[1]).toBeLessThan(40);
+  });
+
+  it('reports the ground range the channel crosses, so callers need not guess', () => {
+    const [lo, hi] = tool.stats.groundRange_mm ?? [0, 0];
+    expect(hi).toBeGreaterThan(lo);
+    // The floor sits exactly the depth below the lowest ground under the ribbon.
+    expect(tool.stats.flatBottom_mm).toBeCloseTo(lo - 1, 4);
+  });
+});
+
+describe('how far the insert stands proud', () => {
+  const insertAt = (proud_mm: number) =>
+    buildRouteSolid(routeAcross(), {
+      ...common,
+      cut: { kind: 'insert', depth_mm: 1, proud_mm, clearance_mm: 0.15 },
+    });
+
+  /**
+   * The route's Height control drives this. Zero has to mean flush, and the
+   * range has to reach far enough for a route that deliberately stands out of
+   * the model, which is what reads in a single colour.
+   */
+  it('sits flush with the terrain at zero', () => {
+    const flush = insertAt(0);
+    const surface = buildRouteSolid(routeAcross(), {
+      ...common,
+      cut: { kind: 'cut', depth_mm: 0, proud_mm: 0 },
+    });
+    // Same top as the bare terrain under the ribbon. Not to the last micron:
+    // the insert is inset by the clearance, so its footprint covers slightly
+    // different ground and finds a slightly different high point.
+    expect(zRange(flush.mesh.positions)[1]).toBeCloseTo(zRange(surface.mesh.positions)[1], 1);
+  });
+
+  it('rises by exactly what it is asked for', () => {
+    const base = zRange(insertAt(0).mesh.positions)[1];
+    for (const proud of [0.4, 1.5, 3]) {
+      expect(zRange(insertAt(proud).mesh.positions)[1]).toBeCloseTo(base + proud, 3);
+    }
+  });
+
+  it('stays a closed solid however far it stands out', () => {
+    for (const proud of [0, 0.4, 3]) {
+      const v = validateMesh(insertAt(proud).mesh.positions, insertAt(proud).mesh.indices);
+      expect(v.openEdges).toBe(0);
+      expect(v.nonManifoldEdges).toBe(0);
+    }
+  });
 });
 
 describe('inlay insert', () => {

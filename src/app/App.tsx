@@ -501,6 +501,9 @@ export function App() {
         <aside className="panel">
           <RoutePanel
             colorMode={config.colorMode}
+            cutoutSubMode={config.cutout.subMode}
+            insertProud_mm={config.cutout.insertProud_mm}
+            onInsertProudChange={(v) => update({ cutout: { ...config.cutout, insertProud_mm: v } })}
             routes={routes}
             busy={busy}
             onUpload={onUpload}
@@ -792,17 +795,10 @@ export function App() {
                       onChange={(v) => update({ cutout: { ...config.cutout, clearance_mm: v } })}
                       hint="Gap per side. Too tight and the insert will not seat; too loose and it rattles. 0.15 mm is the usual FDM press fit."
                     />
-                    <NumberField
-                      label="Insert proud"
-                      unit="mm"
-                      value={config.cutout.insertProud_mm}
-                      min={0}
-                      max={2}
-                      step={0.1}
-                      disabled={busy}
-                      onChange={(v) => update({ cutout: { ...config.cutout, insertProud_mm: v } })}
-                      hint="How far the insert stands above the terrain once seated."
-                    />
+                    <p className="field__hint">
+                      How far the insert stands out of the channel is the route&rsquo;s
+                      <strong> Height</strong>, under Routes. Zero seats it flush.
+                    </p>
                   </>
                 ) : null}
               </>

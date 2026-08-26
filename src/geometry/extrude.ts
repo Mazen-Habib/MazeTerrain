@@ -41,6 +41,17 @@ export interface ExtrudeOptions {
    * right from above and only its thickness varies.
    */
   flatBottom_mm?: number;
+  /**
+   * Put the top face at this absolute Z instead of following the terrain.
+   *
+   * For a cutting tool, which is never printed and only has to enclose the
+   * volume being removed. A draped top stops at a fixed height above the
+   * ground, so anything standing taller than that — a building, a road, a
+   * contour ring — keeps the part of itself above the tool and is left
+   * hanging over the channel once its base is cut away.
+   * See docs/08-pitfalls.md#the-channel-decapitates-what-it-crosses.
+   */
+  flatTop_mm?: number;
 }
 
 export interface SolidMesh {
@@ -545,7 +556,8 @@ export function extrudeDraped(
       const [x_mm, y_mm] = toPrintXY(x_m, y_m);
       const terrainZ = sampleTerrainZ(x_m, y_m);
 
-      const top = terrainZ + options.height_mm;
+      const top =
+        options.flatTop_mm !== undefined ? options.flatTop_mm : terrainZ + options.height_mm;
       const bottom =
         options.flatBottom_mm !== undefined
           ? options.flatBottom_mm

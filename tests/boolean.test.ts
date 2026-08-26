@@ -157,3 +157,85 @@ describe('unionParts', () => {
     await expect(unionParts([], { name: 'model', color: '#fff' })).rejects.toThrow(BooleanError);
   });
 });
+
+/**
+ * docs/08-pitfalls.md#the-channel-decapitates-what-it-crosses
+ *
+ * The channel has to cut through everything standing on the terrain, not just
+ * the terrain. A tool that stops short leaves the top of whatever it crosses
+ * floating over the trench — a perfectly closed solid that no manifold check
+ * objects to, which is why this needs its own test.
+ */
+describe('a channel cut through something standing on the terrain', () => {
+  /** Connected components over welded positions. */
+  function componentCount(part: MeshPart): number {
+    const { positions, indices } = part;
+    const n = positions.length / 3;
+    const weld = new Map<string, number>();
+    const canon = new Int32Array(n);
+    for (let v = 0; v < n; v++) {
+      const k =
+        positions[v * 3].toFixed(4) +
+        ',' +
+        positions[v * 3 + 1].toFixed(4) +
+        ',' +
+        positions[v * 3 + 2].toFixed(4);
+      const seen = weld.get(k);
+      if (seen === undefined) {
+        weld.set(k, v);
+        canon[v] = v;
+      } else canon[v] = seen;
+    }
+    const parent = new Int32Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+    const find = (x: number): number => {
+      while (parent[x] !== x) {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+      }
+      return x;
+    };
+    const uni = (a: number, b: number): void => {
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent[ra] = rb;
+    };
+    for (let v = 0; v < n; v++) uni(v, canon[v]);
+    for (let k = 0; k < indices.length; k += 3) {
+      uni(indices[k], indices[k + 1]);
+      uni(indices[k + 1], indices[k + 2]);
+    }
+    const roots = new Set<number>();
+    for (let k = 0; k < indices.length; k += 3) roots.add(find(indices[k]));
+    return roots.size;
+  }
+
+  // Ground 0..5, with a 3-tall tower standing on it that the channel crosses.
+  const ground = boxPart('ground', [0, 0, 0], [10, 10, 5]);
+  const tower = boxPart('tower', [4, 4, 4.5], [6, 6, 8]);
+
+  it('leaves the top of the tower floating when the tool stops too low', async () => {
+    const body = await unionParts([ground, tower], { name: 'body', color: '#888888' });
+    expect(componentCount(body)).toBe(1);
+
+    // Spans the tower's whole footprint, but reaches only 1 above the ground
+    // surface -- below the tower's 8. Everything holding the cap up is removed.
+    const short = boxPart('cut', [0, 3.5, 4], [10, 6.5, 6]);
+    const cut = await subtractParts(body, [short], { name: 'model', color: '#888888' });
+
+    expect(componentCount(cut)).toBeGreaterThan(1);
+  });
+
+  it('cuts cleanly through when the tool clears everything', async () => {
+    const body = await unionParts([ground, tower], { name: 'body', color: '#888888' });
+
+    // The fix: one flat top above the tallest thing in the model.
+    const tall = boxPart('cut', [0, 3.5, 4], [10, 6.5, 13]);
+    const cut = await subtractParts(body, [tall], { name: 'model', color: '#888888' });
+
+    // The tower is taken out along with the ground beneath it, and what remains
+    // is one piece.
+    expect(componentCount(cut)).toBe(1);
+    expect(validateMesh(cut.positions, cut.indices).manifold).toBe(true);
+  });
+});

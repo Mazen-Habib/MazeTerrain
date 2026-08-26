@@ -40,6 +40,8 @@ export interface RouteBuildStats {
    * computing its own — see `cut.floor_mm`.
    */
   flatBottom_mm?: number;
+  /** Lowest and highest draped ground the channel footprint crosses, print mm. */
+  groundRange_mm?: [number, number];
 }
 
 export interface RouteBuildResult {
@@ -130,6 +132,18 @@ export interface BuildRouteOptions {
     /** Channel floor, measured below the LOWEST terrain the route crosses. */
     depth_mm: number;
     proud_mm: number;
+    /**
+     * Absolute Z for the top of a `cut` tool. Ignored for `insert`.
+     *
+     * A cutting tool has to enclose everything the channel passes through, not
+     * just the terrain. Stopping a fixed distance above the draped ground left
+     * every building and road taller than that with its base removed and its
+     * top floating over the trench: 159 detached pieces on a 9.2 km city model,
+     * where roads reached 1.08 mm and buildings 1.20 mm above ground while the
+     * tool stopped at 1.00 mm.
+     * See docs/08-pitfalls.md#the-channel-decapitates-what-it-crosses.
+     */
+    toolTop_mm?: number;
     /** Gap per side between insert and cavity. Ignored for `cut`. */
     clearance_mm?: number;
     /**
@@ -232,22 +246,36 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
   // One flat floor for the channel and the piece that seats in it, placed under
   // the lowest ground the route crosses so the channel exists along all of it.
   let flatBottom_mm: number | undefined;
+  /** Lowest and highest draped ground under the footprint, print mm. */
+  let groundRange_mm: [number, number] | undefined;
   if (options.cut) {
     // Sampled over the FOOTPRINT, not the centreline. The ribbon is wide, and
     // its edges reach ground the centreline never crosses — often lower. Taking
     // the centreline minimum puts the floor above the lowest point the channel
     // actually spans, which makes the cut shallower than asked for there and,
     // on a side slope, leaves stretches with no channel cut at all.
-    if (options.cut.floor_mm !== undefined) {
-      flatBottom_mm = options.cut.floor_mm;
-    } else {
-      let lowest = Infinity;
-      for (const polygon of footprint) {
-        for (const ring of polygon) {
-          for (const [x_m, y_m] of ring) lowest = Math.min(lowest, sampleTerrainZ(x_m, y_m));
+    let lowest = Infinity;
+    let highest = -Infinity;
+    for (const polygon of footprint) {
+      for (const ring of polygon) {
+        for (const [x_m, y_m] of ring) {
+          const z = sampleTerrainZ(x_m, y_m);
+          if (z < lowest) lowest = z;
+          if (z > highest) highest = z;
         }
       }
-      if (Number.isFinite(lowest)) flatBottom_mm = lowest - options.cut.depth_mm;
+    }
+    // Reported so callers can say how far the channel has to cut at the high
+    // end. Derived here rather than from the mesh, because a cutting tool's own
+    // Z extent says nothing about the ground once it is given a flat top.
+    if (Number.isFinite(lowest) && Number.isFinite(highest)) {
+      groundRange_mm = [lowest, highest];
+    }
+
+    if (options.cut.floor_mm !== undefined) {
+      flatBottom_mm = options.cut.floor_mm;
+    } else if (Number.isFinite(lowest)) {
+      flatBottom_mm = lowest - options.cut.depth_mm;
     }
   }
 
@@ -259,6 +287,9 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
       height_mm: options.cut ? options.cut.proud_mm : style.height_mm,
       penetration_mm: options.cut ? options.cut.depth_mm : penetrationFor(style.height_mm),
       ...(flatBottom_mm !== undefined ? { flatBottom_mm } : {}),
+      ...(options.cut?.kind === 'cut' && options.cut.toolTop_mm !== undefined
+        ? { flatTop_mm: options.cut.toolTop_mm }
+        : {}),
       // Keep the underside strictly inside the base slab, never coplanar with
       // it and never below the build plate. A cutting tool is exempt: it is
       // never printed, and clamping it would make the channel shallower than
@@ -276,6 +307,7 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
       ...emptyStats,
       triangles: mesh.triangles,
       ...(flatBottom_mm !== undefined ? { flatBottom_mm } : {}),
+      ...(groundRange_mm !== undefined ? { groundRange_mm } : {}),
     },
   };
 }

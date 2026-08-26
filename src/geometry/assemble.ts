@@ -101,6 +101,15 @@ function footprintArea_mm2(polygons: MultiPolygon, scale_mm_per_m: number): numb
 }
 
 /**
+ * How far above the tallest thing in the model a cutting tool reaches.
+ *
+ * The tool is never printed, so a generous margin costs nothing but guarantees
+ * the subtract opens the channel through every layer rather than shaving the
+ * bottom off whatever it crosses.
+ */
+const CUT_TOOL_HEADROOM_MM = 5;
+
+/**
  * Share of the plate above which contours have stopped being lines. Measured on
  * real mountain terrain: a quarter still reads as a relief map, and the 86% a
  * fixed 50 m interval produced there did not.
@@ -624,6 +633,20 @@ export async function assemble(
   }
 
   // --- Stage 6: route solids ------------------------------------------------
+  //
+  // A cutting tool has to enclose everything the channel passes through. The
+  // terrain is the least of it: roads, buildings and contour rings all stand
+  // proud of the ground by amounts that depend on the data, so the only safe
+  // ceiling is the top of what has actually been built.
+  let bodyTop_mm = -Infinity;
+  for (const part of [mesh, ...featureParts, ...contourParts]) {
+    const positions = part.positions;
+    for (let i = 2; i < positions.length; i += 3) {
+      if (positions[i] > bodyTop_mm) bodyTop_mm = positions[i];
+    }
+  }
+  const toolTop_mm = Number.isFinite(bodyTop_mm) ? bodyTop_mm + CUT_TOOL_HEADROOM_MM : undefined;
+
   const visibleRoutes = routes.filter((r) => r.style.visible);
   const routeParts: MeshPart[] = [];
   /**
@@ -684,9 +707,10 @@ export async function assemble(
             ...(config.cutout.subMode === 'inlay'
               ? { clearance_mm: config.cutout.clearance_mm }
               : {}),
-            // Generous: the tool only has to clear the local surface, and a
-            // channel that fails to break through is worse than a tall tool.
+            // Only a fallback: toolTop_mm below puts the top above everything
+            // that was built, which is the height that actually matters.
             proud_mm: Math.max(1, config.cutout.insetDepth_mm),
+            ...(toolTop_mm !== undefined ? { toolTop_mm } : {}),
           },
         });
         if (tool.mesh.triangles > 0) {
@@ -702,15 +726,11 @@ export async function assemble(
           // that climbs, the channel is as deep as the climb. That is the cost
           // of a flat-bottomed insert (OPEN-QUESTIONS Q10) and the user should
           // hear about it rather than discover it in the slicer.
-          let lowZ = Infinity;
-          let highZ = -Infinity;
-          for (let v = 2; v < tool.mesh.positions.length; v += 3) {
-            const z = tool.mesh.positions[v];
-            if (z < lowZ) lowZ = z;
-            if (z > highZ) highZ = z;
-          }
-          const relief_mm =
-            highZ - lowZ - config.cutout.insetDepth_mm - Math.max(1, config.cutout.insetDepth_mm);
+          // From the GROUND the channel crosses, not the tool's own extent: the
+          // tool is given a flat top above the whole model, so its height says
+          // nothing about the terrain underneath it.
+          const [lowGround, highGround] = tool.stats.groundRange_mm ?? [0, 0];
+          const relief_mm = highGround - lowGround;
           if (relief_mm > 3 * config.cutout.insetDepth_mm) {
             warnings.push({
               level: 'warn',
