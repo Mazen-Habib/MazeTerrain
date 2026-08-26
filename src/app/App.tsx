@@ -500,6 +500,7 @@ export function App() {
       <div className="body">
         <aside className="panel">
           <RoutePanel
+            colorMode={config.colorMode}
             routes={routes}
             busy={busy}
             onUpload={onUpload}

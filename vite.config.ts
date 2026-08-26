@@ -18,5 +18,13 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    /**
+     * Longer than the 5 s default, because a good many of these tests build
+     * real geometry — a city's worth of ribbons, a marathon route, a boolean
+     * through the WASM kernel — rather than exercising pure functions. Raised
+     * when Delaunay flipping was added: production got faster, but the test
+     * fixtures are deliberately punishing and were tripping the default.
+     */
+    testTimeout: 30_000,
   },
 });

@@ -5,19 +5,37 @@
  * gain and a tiny sparkline profile per route, not just point counts."
  */
 import { useRef, useState } from 'react';
+import type { ColorMode } from '../geometry/types';
 import type { Route } from '../data/gpx/types';
 import { NumberField } from './NumberField';
 
 interface RoutePanelProps {
   routes: Route[];
   busy: boolean;
+  /**
+   * The colour mode in force.
+   *
+   * A cut-out model has no raised route to give a height to — the route becomes
+   * a channel, and how far the insert stands proud is a cutout setting. Showing
+   * a live Height control there is a lie: it moves and nothing happens.
+   */
+  colorMode: ColorMode;
   onUpload: (files: FileList | null) => void;
   onUpdate: (id: string, patch: Partial<Route['style']>) => void;
   onRemove: (id: string) => void;
   onFit: () => void;
 }
 
-export function RoutePanel({ routes, busy, onUpload, onUpdate, onRemove, onFit }: RoutePanelProps) {
+export function RoutePanel({
+  routes,
+  busy,
+  colorMode,
+  onUpload,
+  onUpdate,
+  onRemove,
+  onFit,
+}: RoutePanelProps) {
+  const cutout = colorMode === 'single-cutout';
   const input = useRef<HTMLInputElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -152,8 +170,15 @@ export function RoutePanel({ routes, busy, onUpload, onUpdate, onRemove, onFit }
                 min={0.2}
                 max={6}
                 step={0.1}
-                disabled={busy}
+                disabled={busy || cutout}
                 onChange={(v) => onUpdate(selected.id, { height_mm: v })}
+                {...(cutout
+                  ? {
+                      hint:
+                        'Not used in cut-out mode: the route is a channel, not a ridge. ' +
+                        'Use "Insert proud" under Colour mode for how far the insert stands.',
+                    }
+                  : {})}
               />
 
               <div className="field">
