@@ -14,7 +14,7 @@ import {
 import type { LineFeature, PolygonFeature } from '../src/data/osm/normalise';
 import type { Pt } from '../src/data/gpx/simplify';
 import type { Ring } from '../src/geometry/polygons';
-import { validateMesh } from '../src/geometry/validate';
+import { validateMesh, weldVertices } from '../src/geometry/validate';
 import { buildRibbonField } from '../src/geometry/ribbonField';
 import { extrudeDraped } from '../src/geometry/extrude';
 import { unprojectENU } from '../src/geometry/coords';
@@ -511,6 +511,26 @@ describe('touching contours', () => {
       const v = validateMesh(mesh.positions, mesh.indices);
       expect(v.nonManifoldEdges).toBe(0);
       expect(v.openEdges).toBe(0);
+      expect(v.manifold).toBe(true);
+    }
+  });
+
+  /**
+   * The split has to hold up to a positional weld.
+   *
+   * Splitting a pinch by index alone is undone by the first thing downstream
+   * that treats two vertices at the same coordinates as one — which is every
+   * validation path, every boolean kernel and every slicer. This test is the
+   * one that was missing: the contours layer went into repairAndValidate clean
+   * and came out with 26 non-manifold edges, and checking the unwelded buffer
+   * saw nothing wrong.
+   */
+  it('keeps the split apart through a positional weld', () => {
+    for (const radius of [1800, 1200, 700]) {
+      const mesh = extrude(streetGrid(), circleRing(radius));
+      const welded = weldVertices(mesh.positions, mesh.indices);
+      const v = validateMesh(welded.positions, welded.indices);
+      expect(v.nonManifoldEdges).toBe(0);
       expect(v.manifold).toBe(true);
     }
   });

@@ -6,7 +6,7 @@
  * that path rather than repeating it.
  */
 import { describe, expect, it } from 'vitest';
-import { contourLevels, traceContours } from '../src/geometry/contours';
+import { contourLevels, suggestInterval, traceContours } from '../src/geometry/contours';
 import { makeHeightfield } from './helpers';
 
 describe('contourLevels', () => {
@@ -108,5 +108,46 @@ describe('traceContours', () => {
     // Fragmentation shows up as many very short pieces.
     const stubs = lines.filter((l) => l.length < 5).length;
     expect(stubs / lines.length).toBeLessThan(0.5);
+  });
+});
+
+describe('suggestInterval', () => {
+  /** A constant-gradient ramp, so the slope it should be sizing against is known. */
+  const ramp = (gradient: number, spacing_m = 50) =>
+    makeHeightfield(64, 64, (i) => i * spacing_m * gradient, spacing_m);
+
+  it('grows with the steepness of the ground', () => {
+    // A generous zScale, so the ring-height floor does not swallow both cases.
+    const zScale = 0.05;
+    const gentle = suggestInterval(ramp(0.05), 100, zScale, 0.7);
+    const steep = suggestInterval(ramp(0.5), 100, zScale, 0.7);
+
+    expect(steep).toBeGreaterThan(gentle);
+  });
+
+  it('keeps neighbouring rings from touching on the ground it sized for', () => {
+    const gradient = 0.3;
+    const width_m = 100;
+    const interval = suggestInterval(ramp(gradient), width_m, 0.005, 0.7);
+
+    // Horizontal separation on that slope, versus the width of one ribbon.
+    expect(interval / gradient).toBeGreaterThanOrEqual(width_m * 2);
+  });
+
+  it('keeps a ring from burying the ring above it, however flat the ground', () => {
+    const zScale = 0.005;
+    const lineHeight_mm = 0.7;
+    // Dead flat: nothing forces the interval apart except the ring height.
+    const interval = suggestInterval(makeHeightfield(64, 64, () => 500, 50), 100, zScale, lineHeight_mm);
+
+    expect(interval * zScale).toBeGreaterThanOrEqual(lineHeight_mm);
+  });
+
+  it('rounds to a number a map would print', () => {
+    for (const gradient of [0.02, 0.11, 0.27, 0.4, 0.9]) {
+      const interval = suggestInterval(ramp(gradient), 100, 0.005, 0.7);
+      const magnitude = 10 ** Math.floor(Math.log10(interval));
+      expect([1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]).toContain(interval / magnitude);
+    }
   });
 });

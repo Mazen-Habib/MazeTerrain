@@ -358,10 +358,13 @@ function subdivide(xy: number[], tris: number[], maxEdge: number): number[] {
  * up with four adjacent faces: non-manifold, export blocked.
  *
  * Giving each fan its own copy of the vertex costs one duplicated position and
- * makes the surface a clean 2-manifold. The copies sit at the same coordinates,
- * so nothing moves.
+ * makes the surface a clean 2-manifold. The copy retreats a fraction of an edge
+ * into its own fan, because an index-only split is undone by the first thing
+ * downstream that merges vertices by position.
  * See docs/08-pitfalls.md#bowtie-vertices-from-touching-contours.
  */
+const BOWTIE_NUDGE = 0.01;
+
 function splitBowtieVertices(xy: number[], tris: number[]): void {
   const vertexCount = xy.length / 2;
 
@@ -420,8 +423,46 @@ function splitBowtieVertices(xy: number[], tris: number[]): void {
 
       // The first fan keeps the original vertex; the rest get copies.
       if (component > 0) {
+        // The copy has to MOVE, not just get a new index. Anything downstream
+        // that merges vertices by position — the weld in validate.ts, a boolean
+        // kernel, a slicer — fuses two copies at identical coordinates straight
+        // back together and restores the pinch this split just removed.
+        //
+        // Retreating a fraction of the shortest edge running into the pinch,
+        // towards the fan's own centroid, keeps the copy well inside the fan it
+        // belongs to. The step is proportional, so it stays sub-micron on the
+        // print at every scale while staying far above any weld tolerance.
+        let cx = 0;
+        let cy = 0;
+        let n = 0;
+        let shortest = Infinity;
+        for (const t of group) {
+          for (let e = 0; e < 3; e++) {
+            const w = tris[t + e];
+            if (w === v) continue;
+            cx += xy[w * 2];
+            cy += xy[w * 2 + 1];
+            n++;
+            const d = Math.hypot(xy[w * 2] - xy[v * 2], xy[w * 2 + 1] - xy[v * 2 + 1]);
+            if (d > 0 && d < shortest) shortest = d;
+          }
+        }
+
+        let px = xy[v * 2];
+        let py = xy[v * 2 + 1];
+        if (n > 0 && Number.isFinite(shortest)) {
+          const dx = cx / n - px;
+          const dy = cy / n - py;
+          const len = Math.hypot(dx, dy);
+          if (len > 0) {
+            const step = (shortest * BOWTIE_NUDGE) / len;
+            px += dx * step;
+            py += dy * step;
+          }
+        }
+
         const copy = xy.length / 2;
-        xy.push(xy[v * 2], xy[v * 2 + 1]);
+        xy.push(px, py);
         for (const t of group) {
           for (let e = 0; e < 3; e++) if (tris[t + e] === v) tris[t + e] = copy;
         }

@@ -17,8 +17,9 @@ import { buildClippedTerrainMesh } from './terrainClip';
 import { findFloatingVertices, repairAndValidate, validateMesh } from './validate';
 import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
-import { traceContours } from './contours';
+import { traceContours, suggestInterval } from './contours';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
+import type { MultiPolygon } from './polygons';
 import { extrudeDraped } from './extrude';
 import {
   buildLineLayer,
@@ -73,6 +74,38 @@ const MIN_DEM_ZOOM = 6;
  * See docs/08-pitfalls.md#feature-triangle-explosion.
  */
 const FEATURE_TRIANGLE_BUDGET = 6_000_000;
+
+/**
+ * Total area of a multipolygon footprint in print mm2, holes subtracted.
+ *
+ * Used to say how much of the plate the contours have taken over, which is the
+ * measure that actually tracks legibility — counting rings does not, because
+ * rings that have merged are no longer rings.
+ */
+function footprintArea_mm2(polygons: MultiPolygon, scale_mm_per_m: number): number {
+  const k = scale_mm_per_m * scale_mm_per_m;
+  let total = 0;
+  for (const polygon of polygons) {
+    for (let r = 0; r < polygon.length; r++) {
+      const ring = polygon[r];
+      let twice = 0;
+      for (let i = 0; i < ring.length; i++) {
+        const p = ring[i];
+        const q = ring[(i + 1) % ring.length];
+        twice += p[0] * q[1] - q[0] * p[1];
+      }
+      total += (r === 0 ? 1 : -1) * Math.abs(twice / 2) * k;
+    }
+  }
+  return total;
+}
+
+/**
+ * Share of the plate above which contours have stopped being lines. Measured on
+ * real mountain terrain: a quarter still reads as a relief map, and the 86% a
+ * fixed 50 m interval produced there did not.
+ */
+const CONTOUR_COVERAGE_LIMIT = 0.3;
 
 export async function assemble(
   request: GenerateRequest,
@@ -486,25 +519,33 @@ export async function assemble(
   // road layers use, so they inherit its fixes rather than repeating them.
   const contourParts: MeshPart[] = [];
   if (config.contours.enabled) {
+    // One nozzle wide: a contour is a hairline by nature, and anything wider
+    // reads as a terrace rather than a line.
+    const width_m = config.nozzleDiameter_mm / scale.scale;
+    const height_mm = Math.max(0.1, config.contours.lineHeight_mm);
+
+    // The interval that keeps rings apart on THIS terrain at THIS size. Used
+    // directly when set to auto, and as the advice when a fixed one crowds.
+    const suggested_m = suggestInterval(heightfield, width_m, scale.zScale, height_mm);
+    const interval_m =
+      config.contours.interval_m === 'auto' ? suggested_m : config.contours.interval_m;
+
     report({
       stage: 'building-features',
       percent: FEATURES_END,
-      detail: `Tracing contours every ${config.contours.interval_m} m`,
+      detail: `Tracing contours every ${interval_m} m`,
     });
 
-    const traced = traceContours(heightfield, config.contours.interval_m);
+    const traced = traceContours(heightfield, interval_m);
     if (traced.lines.length === 0) {
       warnings.push({
         level: 'warn',
         code: 'contours-empty',
         message:
-          `No contours at ${config.contours.interval_m} m — this area only spans ` +
+          `No contours at ${interval_m} m — this area only spans ` +
           `${(heightfield.max_m - heightfield.min_m).toFixed(0)} m. Reduce the interval.`,
       });
     } else {
-      // One nozzle wide: a contour is a hairline by nature, and anything wider
-      // reads as a terrace rather than a line.
-      const width_m = config.nozzleDiameter_mm / scale.scale;
       const ribbon = buildRibbonField(
         traced.lines,
         width_m,
@@ -512,7 +553,6 @@ export async function assemble(
         FEATURE_CELLS_PER_HALF_WIDTH,
       );
       if (ribbon.polygons.length > 0) {
-        const height_mm = Math.max(0.1, config.contours.lineHeight_mm);
         const mesh = extrudeDraped(
           ribbon.polygons,
           (x_m, y_m) =>
@@ -535,27 +575,49 @@ export async function assemble(
           });
         }
       }
-      // Rings this close together merge into a staircase rather than reading as
-      // separate lines, and they cost more geometry than the terrain does.
-      const relief_mm = scale.zScale * (heightfield.max_m - heightfield.min_m);
-      const spacing_mm = relief_mm / Math.max(1, traced.levels.length);
-      if (traced.levels.length > 30 || spacing_mm < config.nozzleDiameter_mm * 3) {
-        const suggested =
-          Math.ceil((heightfield.max_m - heightfield.min_m) / 20 / 5) * 5;
+      // Crowding is not a matter of how many rings there are — it is how much
+      // of the plate they end up covering once neighbours touch and merge.
+      // Vertical spacing alone missed this badly: 49 rings reported as "0.22 mm
+      // apart" were in fact fused across 86% of the model.
+      const covered_mm2 = footprintArea_mm2(ribbon.polygons, scale.scale);
+      const plate_mm2 = Math.max(
+        1,
+        (heightfield.cols - 1) * heightfield.spacingX_m * scale.scale *
+          (heightfield.rows - 1) * heightfield.spacingY_m * scale.scale,
+      );
+      const coverage = covered_mm2 / plate_mm2;
+      if (coverage > CONTOUR_COVERAGE_LIMIT) {
         warnings.push({
           level: 'warn',
           code: 'contours-crowded',
           message:
-            `${traced.levels.length} contour rings at ${config.contours.interval_m} m, ` +
-            `about ${spacing_mm.toFixed(2)} mm apart vertically. On steep ground they will ` +
-            `merge into a staircase. Try an interval of about ${suggested} m.`,
+            `${traced.levels.length} contour rings at ${interval_m} m cover ` +
+            `${(coverage * 100).toFixed(0)}% of the model — on ground this steep they touch ` +
+            `and merge into a crust rather than reading as separate lines. ` +
+            (config.contours.interval_m === 'auto'
+              ? 'Raise the interval, or lower the vertical exaggeration.'
+              : `Try ${suggested_m} m, or switch the interval to Auto.`),
+        });
+      }
+      // A ring taller than the gap to the ring above simply buries it.
+      const spacing_mm = interval_m * scale.zScale;
+      if (height_mm > spacing_mm) {
+        warnings.push({
+          level: 'warn',
+          code: 'contours-crowded',
+          message:
+            `Each ring stands ${height_mm.toFixed(2)} mm proud but the rings are only ` +
+            `${spacing_mm.toFixed(2)} mm apart vertically, so every ring buries the ` +
+            `${Math.floor(height_mm / Math.max(spacing_mm, 1e-6))} above it. ` +
+            `Drop the contour height to about ${(spacing_mm * 0.6).toFixed(1)} mm, ` +
+            `or raise the interval.`,
         });
       }
 
       report({
         stage: 'building-features',
         percent: FEATURES_END,
-        detail: `${traced.levels.length} contour level(s)`,
+        detail: `${traced.levels.length} contour level(s) every ${interval_m} m`,
       });
     }
     throwIfAborted();
@@ -820,9 +882,14 @@ export async function assemble(
   // Anything draped should sit within its own height of the ground. When it
   // does not it shows as a cone or blade standing out of the model, and every
   // other check still passes because the mesh is watertight either way.
-  for (const part of [...featureParts, ...routeParts]) {
+  for (const part of [...featureParts, ...contourParts, ...routeParts]) {
     const layer = config.layers[part.name];
-    const height_mm = layer ? Math.max(0.1, layer.height_mm * layer.heightScale) : 1.5;
+    const height_mm =
+      part.name === 'contours'
+        ? Math.max(0.1, config.contours.lineHeight_mm)
+        : layer
+          ? Math.max(0.1, layer.height_mm * layer.heightScale)
+          : 1.5;
     // Generous: three times the feature's own height, and never less than 2 mm.
     const allowed = Math.max(2, height_mm * 3);
     const floating = findFloatingVertices(terrainPart.positions, part.positions, allowed);

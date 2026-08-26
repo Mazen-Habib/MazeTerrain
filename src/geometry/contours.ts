@@ -36,6 +36,87 @@ export function contourLevels(min_m: number, max_m: number, interval_m: number):
   return levels;
 }
 
+/**
+ * An elevation interval whose rings will actually read as separate lines.
+ *
+ * A fixed interval cannot work: whether 50 m rings are legible depends entirely
+ * on how steep the ground is and how large the model is. On a slope of gradient
+ * `g`, successive rings at interval `I` sit `I / g` apart horizontally, so once
+ * `I / g` drops below the ribbon width the rings touch and merge. Measured on
+ * real mountain terrain at 34 km, a fixed 50 m interval fused 49 rings into a
+ * crust covering 86% of the plate — not contour lines, a rough-textured slab.
+ * See docs/08-pitfalls.md#contours-merge-into-a-crust.
+ *
+ * Two constraints, whichever is larger:
+ *
+ *  - horizontal, so neighbouring rings keep a gap of about their own width;
+ *  - vertical, so a ring does not stand taller than the gap to the ring above
+ *    and simply bury it.
+ *
+ * The horizontal one is taken at a high percentile of slope rather than the
+ * maximum, because a single cliff would otherwise push the interval so coarse
+ * that the rest of the model loses its contours entirely.
+ *
+ * @param width_m       ribbon width in world metres
+ * @param zScale        print mm per real metre of elevation
+ * @param lineHeight_mm how far a ring stands proud
+ */
+export function suggestInterval(
+  hf: Heightfield,
+  width_m: number,
+  zScale: number,
+  lineHeight_mm: number,
+): number {
+  const { cols, rows, data, spacingX_m, spacingY_m } = hf;
+
+  // Slope magnitude by central differences, subsampled: this runs on every
+  // build and a full pass over a large grid buys no extra accuracy.
+  const step = Math.max(1, Math.floor(Math.min(cols, rows) / 128));
+  const slopes: number[] = [];
+  for (let j = step; j < rows - step; j += step) {
+    for (let i = step; i < cols - step; i += step) {
+      const dzdx = (data[j * cols + i + step] - data[j * cols + i - step]) / (2 * step * spacingX_m);
+      const dzdy = (data[(j + step) * cols + i] - data[(j - step) * cols + i]) / (2 * step * spacingY_m);
+      const g = Math.hypot(dzdx, dzdy);
+      if (Number.isFinite(g)) slopes.push(g);
+    }
+  }
+
+  let gradient = 0;
+  if (slopes.length > 0) {
+    slopes.sort((a, b) => a - b);
+    gradient = slopes[Math.floor(slopes.length * SLOPE_PERCENTILE)];
+  }
+
+  // Ring plus a gap of the same width.
+  const horizontal_m = gradient * width_m * 2;
+  // A ring must not be taller than the gap to its neighbour.
+  const vertical_m = zScale > 0 ? (lineHeight_mm * 2) / zScale : 0;
+
+  const wanted = Math.max(horizontal_m, vertical_m, 1);
+
+  // Round up to a number a map would use, so the label reads 100 m, not 87 m.
+  const magnitude = 10 ** Math.floor(Math.log10(wanted));
+  for (const step_ of NICE_STEPS) {
+    const candidate = step_ * magnitude;
+    if (candidate >= wanted) return candidate;
+  }
+  return 10 * magnitude;
+}
+
+/**
+ * Intervals a map would actually print. Coarse enough to read as round numbers,
+ * fine enough that rounding up does not double the interval it was asked for.
+ */
+const NICE_STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10];
+
+/**
+ * Slope percentile the horizontal spacing is sized against. The steepest ground
+ * always merges; sizing for the 75th percentile keeps three quarters of the
+ * model legible without letting one cliff dictate the whole map.
+ */
+const SLOPE_PERCENTILE = 0.75;
+
 /** Where a value crosses `iso` between two samples, as a fraction. */
 function crossing(a: number, b: number, iso: number): number {
   const d = b - a;

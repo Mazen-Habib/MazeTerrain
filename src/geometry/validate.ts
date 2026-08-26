@@ -244,8 +244,22 @@ export function repairAndValidate(
   positions: Float32Array,
   indices: Uint32Array,
 ): RepairedMesh {
+  const asGiven = validateMesh(positions, indices);
   const welded = weldVertices(positions, indices);
   const asWelded = validateMesh(welded.positions, welded.indices);
+
+  // A repair that makes the mesh worse is not a repair.
+  //
+  // Welding assumes two vertices at the same coordinates are the same vertex.
+  // That is wrong wherever geometry deliberately keeps a pinch apart: a solid
+  // built from branches that touch at a point is manifold as constructed, and
+  // fusing the touch point gives its vertical edge four adjacent faces. That is
+  // precisely what splitBowtieVertices exists to prevent, and welding was
+  // silently undoing it — the mesh went in clean and came out non-manifold.
+  // See docs/08-pitfalls.md#the-weld-undoes-the-bowtie-split.
+  if (brokenness(asGiven) < brokenness(asWelded)) {
+    return { positions, indices, validation: asGiven, merged: 0, removed: 0 };
+  }
 
   // Nothing to gain: a closed mesh stays closed, slivers and all.
   if (brokenness(asWelded) === 0) {

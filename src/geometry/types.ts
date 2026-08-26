@@ -132,8 +132,15 @@ export interface CutoutSettings {
  */
 export interface ContourSettings {
   enabled: boolean;
-  /** Elevation step between rings, in real metres. */
-  interval_m: number;
+  /**
+   * Elevation step between rings, in real metres.
+   *
+   * 'auto' sizes it from the terrain's own slope so the rings stay separate.
+   * A fixed interval cannot do that: whether 50 m rings read as lines or fuse
+   * into a crust depends on how steep the ground is and how large the model is
+   * (docs/08-pitfalls.md#contours-merge-into-a-crust).
+   */
+  interval_m: number | 'auto';
   /** How far a ring stands above the terrain, print mm. */
   lineHeight_mm: number;
 }

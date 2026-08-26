@@ -231,3 +231,76 @@ describe('repair never breaks a closed mesh', () => {
     expect(repaired.indices.length).toBe(0);
   });
 });
+
+describe('repairAndValidate never makes a mesh worse', () => {
+  /**
+   * Two square prisms meeting at a single shared corner, kept apart by giving
+   * each its own copy of that corner. This is the shape splitBowtieVertices
+   * produces, and the shape a positional weld destroys: fuse the two copies and
+   * the vertical edge through the corner gains four adjacent faces.
+   */
+  function touchingPrisms(gap: number) {
+    const positions: number[] = [];
+    const indices: number[] = [];
+
+    const addBox = (x0: number, y0: number, x1: number, y1: number) => {
+      const o = positions.length / 3;
+      for (const z of [0, 1]) {
+        positions.push(x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z);
+      }
+      // bottom (0..3) wound down, top (4..7) wound up, then the four walls.
+      indices.push(o + 0, o + 2, o + 1, o + 0, o + 3, o + 2);
+      indices.push(o + 4, o + 5, o + 6, o + 4, o + 6, o + 7);
+      for (let i = 0; i < 4; i++) {
+        const a = o + i;
+        const b = o + ((i + 1) % 4);
+        indices.push(a, b, b + 4, a, b + 4, a + 4);
+      }
+    };
+
+    addBox(0, 0, 1, 1);
+    // Second box touches the first at (1,1) exactly when gap is 0.
+    addBox(1 + gap, 1 + gap, 2 + gap, 2 + gap);
+
+    return {
+      positions: Float32Array.from(positions),
+      indices: Uint32Array.from(indices),
+    };
+  }
+
+  it('keeps a mesh that welding would break', () => {
+    const { positions, indices } = touchingPrisms(0);
+
+    // As built it is two closed solids: manifold.
+    expect(validateMesh(positions, indices).manifold).toBe(true);
+    // Welding fuses the shared corner and ruins it.
+    const welded = weldVertices(positions, indices);
+    expect(validateMesh(welded.positions, welded.indices).manifold).toBe(false);
+
+    // The repair must notice and decline.
+    const repaired = repairAndValidate(positions, indices);
+    expect(repaired.validation.manifold).toBe(true);
+    expect(repaired.validation.nonManifoldEdges).toBe(0);
+    expect(repaired.merged).toBe(0);
+  });
+
+  it('still welds when welding actually helps', () => {
+    const cube = unitCube();
+    // Duplicate every vertex, so the mesh arrives as unshared triangles.
+    const positions = new Float32Array(cube.indices.length * 3);
+    const indices = new Uint32Array(cube.indices.length);
+    for (let i = 0; i < cube.indices.length; i++) {
+      const v = cube.indices[i] * 3;
+      positions[i * 3] = cube.positions[v];
+      positions[i * 3 + 1] = cube.positions[v + 1];
+      positions[i * 3 + 2] = cube.positions[v + 2];
+      indices[i] = i;
+    }
+
+    expect(validateMesh(positions, indices).watertight).toBe(false);
+
+    const repaired = repairAndValidate(positions, indices);
+    expect(repaired.validation.manifold).toBe(true);
+    expect(repaired.merged).toBeGreaterThan(0);
+  });
+});

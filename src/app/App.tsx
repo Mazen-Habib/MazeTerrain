@@ -662,23 +662,46 @@ export function App() {
 
             {config.contours.enabled ? (
               <>
-                <NumberField
-                  label="Contour interval"
-                  unit="m"
-                  value={config.contours.interval_m}
-                  min={5}
-                  max={500}
-                  step={5}
-                  disabled={busy}
-                  onChange={(v) => update({ contours: { ...config.contours, interval_m: v } })}
-                  hint={
-                    bundle
-                      ? `This area spans ${(
-                          bundle.stats.elevationRange_m[1] - bundle.stats.elevationRange_m[0]
-                        ).toFixed(0)} m.`
-                      : 'Real metres of elevation between rings.'
-                  }
-                />
+                <div className="field">
+                  <label className="field__label">
+                    Contour interval<span className="field__unit">m</span>
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={config.contours.interval_m === 'auto'}
+                      disabled={busy}
+                      onChange={(e) =>
+                        update({
+                          contours: {
+                            ...config.contours,
+                            interval_m: e.target.checked ? 'auto' : 100,
+                          },
+                        })
+                      }
+                    />
+                    Auto (sized so the rings stay apart on this terrain)
+                  </label>
+                </div>
+                {config.contours.interval_m === 'auto' ? null : (
+                  <NumberField
+                    label="Metres between rings"
+                    unit="m"
+                    value={config.contours.interval_m}
+                    min={5}
+                    max={500}
+                    step={5}
+                    disabled={busy}
+                    onChange={(v) => update({ contours: { ...config.contours, interval_m: v } })}
+                    hint={
+                      bundle
+                        ? `This area spans ${(
+                            bundle.stats.elevationRange_m[1] - bundle.stats.elevationRange_m[0]
+                          ).toFixed(0)} m.`
+                        : 'Real metres of elevation between rings.'
+                    }
+                  />
+                )}
                 <NumberField
                   label="Contour height"
                   unit="mm"
