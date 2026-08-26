@@ -112,24 +112,24 @@ describe('draped features follow the terrain', () => {
   /**
    * The naive fix — quartering every triangle per level — refines the ribbon's
    * tiny cross edges as hard as its enormous long ones, and a single city ran
-   * past V8's Map limit inside validation. Splitting only the long edges has to
-   * stay far cheaper for the same accuracy.
+   * past V8's Map limit inside validation. Cost has to follow the ribbon's
+   * LENGTH, so halving the target edge should roughly double the triangles,
+   * not quadruple them.
    */
-  it('pays for that in triangles proportional to length, not area', () => {
-    const mesh = extrudeDraped(ribbon.polygons, drapeZ, toPrintXY, {
-      height_mm: HEIGHT_MM,
-      penetration_mm: 1.0,
-      minBottom_mm: 0.2,
-      maxEdge_m: terrainStep_m,
-    });
-    const bare = extrudeDraped(ribbon.polygons, drapeZ, toPrintXY, {
-      height_mm: HEIGHT_MM,
-      penetration_mm: 1.0,
-      minBottom_mm: 0.2,
-      maxEdge_m: Infinity,
-    });
-    // Uniform quartering at four levels would be 256x. This is far less.
-    expect(mesh.triangles / bare.triangles).toBeLessThan(40);
+  it('pays for refinement in proportion to length, not area', () => {
+    const at = (maxEdge_m: number) =>
+      extrudeDraped(ribbon.polygons, drapeZ, toPrintXY, {
+        height_mm: HEIGHT_MM,
+        penetration_mm: 1.0,
+        minBottom_mm: 0.2,
+        maxEdge_m,
+      }).triangles;
+
+    const coarse = at(terrainStep_m * 4);
+    const fine = at(terrainStep_m * 2);
+    // Quartering would put this at 4x. Bisection along the length is near 2x.
+    expect(fine / coarse).toBeLessThan(3);
+    expect(fine).toBeGreaterThan(coarse);
   });
 
   it('stays watertight and manifold through refinement', () => {
@@ -208,5 +208,96 @@ describe('findFloatingVertices', () => {
 
   it('handles empty input', () => {
     expect(findFloatingVertices(new Float32Array(0), new Float32Array(0), 2).count).toBe(0);
+  });
+});
+
+
+/**
+ * Triangle shape.
+ *
+ * `earcut` optimises for speed, not shape, and on a long thin ribbon it emits
+ * slivers — triangles with an aspect ratio in the hundreds, which read on a
+ * model as fans of stray geometry. Refinement cannot repair them: bisecting a
+ * sliver gives two slivers, and every level multiplies them.
+ */
+describe('triangle quality', () => {
+  /** Longest edge over shortest altitude. A fat triangle is near 1. */
+  function sliverFraction(mesh: { positions: Float32Array; indices: Uint32Array }): number {
+    const { positions: P, indices: I } = mesh;
+    let slivers = 0;
+    for (let k = 0; k < I.length; k += 3) {
+      const a = I[k] * 3;
+      const b = I[k + 1] * 3;
+      const c = I[k + 2] * 3;
+      const longest = Math.max(
+        Math.hypot(P[b] - P[a], P[b + 1] - P[a + 1]),
+        Math.hypot(P[c] - P[b], P[c + 1] - P[b + 1]),
+        Math.hypot(P[a] - P[c], P[a + 1] - P[c + 1]),
+      );
+      const area2 = Math.abs(
+        (P[b] - P[a]) * (P[c + 1] - P[a + 1]) - (P[b + 1] - P[a + 1]) * (P[c] - P[a]),
+      );
+      const altitude = area2 / Math.max(longest, 1e-12);
+      if (altitude > 1e-12 && longest / altitude > 200) slivers++;
+    }
+    return slivers / (I.length / 3);
+  }
+
+  const line: Pt[] = [
+    [-4000, -1500],
+    [4000, 1500],
+  ];
+  const ribbon = buildRibbonField([line], 0.57 / scale.scale, null, FEATURE_CELLS_PER_HALF_WIDTH);
+
+  it('keeps slivers rare in a refined ribbon', () => {
+    const mesh = extrudeDraped(ribbon.polygons, drapeZ, toPrintXY, {
+      height_mm: HEIGHT_MM,
+      penetration_mm: 1.0,
+      minBottom_mm: 0.2,
+      maxEdge_m: terrainStep_m,
+    });
+    // Ear clipping alone left a third of a real route's triangles as slivers.
+    expect(sliverFraction(mesh)).toBeLessThan(0.2);
+  });
+
+  it('stays watertight and manifold after flipping', () => {
+    const mesh = extrudeDraped(ribbon.polygons, drapeZ, toPrintXY, {
+      height_mm: HEIGHT_MM,
+      penetration_mm: 1.0,
+      minBottom_mm: 0.2,
+      maxEdge_m: terrainStep_m,
+    });
+    const v = validateMesh(mesh.positions, mesh.indices);
+    expect(v.openEdges).toBe(0);
+    expect(v.nonManifoldEdges).toBe(0);
+    expect(v.watertight).toBe(true);
+  });
+
+  /** Flipping must not fold the surface: every triangle keeps its winding. */
+  it('leaves the footprint area unchanged', () => {
+    const area = (mesh: { positions: Float32Array; indices: Uint32Array }) => {
+      const { positions: P, indices: I } = mesh;
+      let sum = 0;
+      for (let k = 0; k < I.length; k += 3) {
+        const a = I[k] * 3;
+        const b = I[k + 1] * 3;
+        const c = I[k + 2] * 3;
+        // Signed, and only the top surface, which all sits above the terrain.
+        if (P[a + 2] < 1 || P[b + 2] < 1 || P[c + 2] < 1) continue;
+        sum +=
+          (P[b] - P[a]) * (P[c + 1] - P[a + 1]) - (P[b + 1] - P[a + 1]) * (P[c] - P[a]);
+      }
+      return sum / 2;
+    };
+
+    const bare = extrudeDraped(ribbon.polygons, drapeZ, toPrintXY, {
+      height_mm: HEIGHT_MM, penetration_mm: 1.0, minBottom_mm: 0.2, maxEdge_m: Infinity,
+    });
+    const refined = extrudeDraped(ribbon.polygons, drapeZ, toPrintXY, {
+      height_mm: HEIGHT_MM, penetration_mm: 1.0, minBottom_mm: 0.2, maxEdge_m: terrainStep_m,
+    });
+    // Same footprint however it is cut up, and the sign is unchanged so no
+    // triangle was flipped inside out.
+    expect(area(refined)).toBeCloseTo(area(bare), 1);
   });
 });

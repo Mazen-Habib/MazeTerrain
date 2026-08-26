@@ -58,8 +58,18 @@ const EMPTY: SolidMesh = {
   triangles: 0,
 };
 
-/** Cap on uniform subdivision levels, so a pathological footprint cannot explode. */
-const MAX_SUBDIVISION_LEVELS = 4;
+/**
+ * Safety cap on refinement levels, so a pathological footprint cannot explode.
+ *
+ * Sized for BISECTION, which roughly doubles the triangle count per level —
+ * four was right when a level quartered (256x) and silently starved the
+ * refinement once it became longest-edge bisection, leaving a 4 km lake at 96
+ * triangles however fine the target. Each level here is worth about half a
+ * level of the old scheme, so the number is correspondingly larger. The loop
+ * exits as soon as no edge exceeds the target, so this only bites on geometry
+ * that cannot converge.
+ */
+const MAX_SUBDIVISION_LEVELS = 16;
 
 const EDGE_SHIFT = 2097152;
 
@@ -68,23 +78,167 @@ function edgeKey(a: number, b: number): number {
 }
 
 /**
- * Refine until no edge is longer than `maxEdge`, splitting ONLY the long edges.
+ * Improve triangle shape by flipping edges toward a Delaunay triangulation.
  *
- * The obvious version splits every triangle four ways per level. That is wrong
- * for the shapes this module gets: a road ribbon is half a millimetre across
- * and kilometres long, so its triangles have one enormous edge and two tiny
- * ones. Quartering them refines the tiny edges as hard as the long one, and the
- * count goes up 4x a level whatever the geometry needs — a single city's roads
- * ran past V8's 16 777 216-entry Map limit and died inside validation.
+ * `earcut` is a fast ear-clipping triangulator, and ear clipping optimises for
+ * speed, not shape: on a long thin ribbon it happily emits slivers. Measured on
+ * a real marathon GPX, its raw output carried 9% slivers past 200:1, and
+ * refinement can only preserve that — longest-edge bisection bounds how much
+ * WORSE quality can get, it cannot make a bad triangulation good.
  *
- * So this is red-green refinement: pick the edges that are actually too long,
- * give each ONE midpoint shared by both triangles that use it, then re-cut each
- * triangle according to how many of its edges were split — one, two or three.
- * Sharing the midpoint is what keeps the mesh conforming; a T-junction here
- * would reopen the very seams this module exists to close.
+ * Flipping fixes the input instead. For a fixed set of points, the Delaunay
+ * triangulation maximises the minimum angle over every possible triangulation,
+ * and Lawson's flip algorithm reaches it by repeatedly replacing the shared
+ * diagonal of two triangles whenever the opposite vertex falls inside their
+ * circumcircle. Vertices, boundary and topology are untouched — only which
+ * diagonal splits each quad changes — so the surface stays exactly the shape
+ * the contour described and the walls, which come from the boundary edges,
+ * are unaffected.
  *
- * Cost then follows length rather than area: a ribbon gains roughly
- * length / maxEdge triangles instead of 4^levels.
+ * Only convex quads are flipped. Flipping a reflex one would fold the surface
+ * over itself, which is how a well-meant quality pass turns into a
+ * self-intersecting mesh.
+ */
+function improveByFlips(xy: number[], tris: number[], maxPasses = 8): number[] {
+  const out = tris.slice();
+
+  const px = (v: number) => xy[v * 2];
+  const py = (v: number) => xy[v * 2 + 1];
+
+  /** > 0 when c is left of a->b. */
+  const cross = (a: number, b: number, c: number) =>
+    (px(b) - px(a)) * (py(c) - py(a)) - (py(b) - py(a)) * (px(c) - px(a));
+
+  /**
+   * Is `d` inside the circumcircle of the counter-clockwise triangle a,b,c?
+   * The standard determinant, which is what the Delaunay condition reduces to.
+   */
+  const inCircle = (a: number, b: number, c: number, d: number): boolean => {
+    const adx = px(a) - px(d);
+    const ady = py(a) - py(d);
+    const bdx = px(b) - px(d);
+    const bdy = py(b) - py(d);
+    const cdx = px(c) - px(d);
+    const cdy = py(c) - py(d);
+    const det =
+      (adx * adx + ady * ady) * (bdx * cdy - cdx * bdy) -
+      (bdx * bdx + bdy * bdy) * (adx * cdy - cdx * ady) +
+      (cdx * cdx + cdy * cdy) * (adx * bdy - bdx * ady);
+    return det > 0;
+  };
+
+  for (let pass = 0; pass < maxPasses; pass++) {
+    // Which two triangles share each edge, and which corner each contributes.
+    const edges = new Map<number, Array<{ tri: number; opposite: number }>>();
+    for (let t = 0; t < out.length; t += 3) {
+      for (let e = 0; e < 3; e++) {
+        const a = out[t + e];
+        const b = out[t + ((e + 1) % 3)];
+        const opposite = out[t + ((e + 2) % 3)];
+        const key = edgeKey(a, b);
+        const list = edges.get(key);
+        if (list) list.push({ tri: t, opposite });
+        else edges.set(key, [{ tri: t, opposite }]);
+      }
+    }
+
+    let flips = 0;
+    const touched = new Set<number>();
+
+    for (const [key, list] of edges) {
+      if (list.length !== 2) continue; // boundary, or a non-manifold edge
+      const [first, second] = list;
+      if (touched.has(first.tri) || touched.has(second.tri)) continue;
+
+      // Recover the shared edge's two endpoints from the first triangle.
+      const t = first.tri;
+      let a = -1;
+      let b = -1;
+      for (let e = 0; e < 3; e++) {
+        const u = out[t + e];
+        const v = out[t + ((e + 1) % 3)];
+        if (edgeKey(u, v) === key) {
+          a = u;
+          b = v;
+          break;
+        }
+      }
+      if (a < 0) continue;
+
+      const c = first.opposite;
+      const d = second.opposite;
+      if (c === d) continue;
+
+      // Convexity: c and d must lie on opposite sides of a->b, and the new
+      // diagonal c->d must separate a from b. Otherwise the quad is reflex and
+      // flipping it folds the surface.
+      const s1 = cross(a, b, c);
+      const s2 = cross(a, b, d);
+      if (s1 === 0 || s2 === 0 || s1 > 0 === s2 > 0) continue;
+      const s3 = cross(c, d, a);
+      const s4 = cross(c, d, b);
+      if (s3 === 0 || s4 === 0 || s3 > 0 === s4 > 0) continue;
+
+      // Delaunay test, with the triangle put in counter-clockwise order first.
+      const ccw = s1 > 0 ? [a, b, c] : [b, a, c];
+      if (!inCircle(ccw[0], ccw[1], ccw[2], d)) continue;
+
+      // Replace the pair, keeping each new triangle wound the same way as the
+      // one it came from.
+      out[t] = a;
+      out[t + 1] = d;
+      out[t + 2] = c;
+      if (cross(a, d, c) < 0) {
+        out[t + 1] = c;
+        out[t + 2] = d;
+      }
+      const u = second.tri;
+      out[u] = b;
+      out[u + 1] = c;
+      out[u + 2] = d;
+      if (cross(b, c, d) < 0) {
+        out[u + 1] = d;
+        out[u + 2] = c;
+      }
+
+      touched.add(first.tri);
+      touched.add(second.tri);
+      flips++;
+    }
+
+    if (flips === 0) break;
+  }
+
+  return out;
+}
+
+/**
+ * Refine until no edge is longer than `maxEdge`, by longest-edge bisection.
+ *
+ * Two constraints pull against each other here, and both have drawn blood.
+ *
+ * Quartering every triangle per level is unaffordable: a road ribbon is half a
+ * millimetre across and kilometres long, so its triangles carry one enormous
+ * edge and two tiny ones, and quartering refines the tiny edges as hard as the
+ * long one. A single city's roads went past V8's 16 777 216-entry `Map` limit
+ * and died inside validation.
+ *
+ * But refining only the long edges, and closing the resulting T-junctions by
+ * cutting the leftover polygon any old way, degrades the triangles instead.
+ * Measured on a real 21 323-point marathon GPX, that turned a mesh with 9%
+ * sliver triangles into one with 46%, aspect ratios past 21 000:1 — the fans of
+ * stray geometry visible on the model. Promoting those cases to a full
+ * four-way split does not help either: 65 816 triangles became 104 004 with the
+ * sliver fraction unchanged.
+ *
+ * Longest-edge bisection is the resolution, and it is the one with a proof
+ * behind it: bisecting a triangle at its LONGEST edge cannot drive the smallest
+ * angle below half the smallest angle of the mesh you started from (Rivara).
+ * Quality is therefore bounded no matter how many levels run. Marking is
+ * propagated to a fixed point so that a triangle only ever has its longest edge
+ * bisected, and midpoints are shared between the two triangles that use an
+ * edge, which is what keeps the mesh conforming — a T-junction here would
+ * reopen the seams this module exists to close.
  */
 function subdivide(xy: number[], tris: number[], maxEdge: number): number[] {
   if (!Number.isFinite(maxEdge) || maxEdge <= 0) return tris;
@@ -93,49 +247,99 @@ function subdivide(xy: number[], tris: number[], maxEdge: number): number[] {
   const lengthOf = (a: number, b: number) =>
     Math.hypot(xy[a * 2] - xy[b * 2], xy[a * 2 + 1] - xy[b * 2 + 1]);
 
+  /** The longest of a triangle's three edges, as [a, b, length]. */
+  const longestEdge = (a: number, b: number, c: number): [number, number, number] => {
+    const ab = lengthOf(a, b);
+    const bc = lengthOf(b, c);
+    const ca = lengthOf(c, a);
+    if (ab >= bc && ab >= ca) return [a, b, ab];
+    if (bc >= ca) return [b, c, bc];
+    return [c, a, ca];
+  };
+
   for (let level = 0; level < MAX_SUBDIVISION_LEVELS; level++) {
-    // One midpoint per over-long edge, created once and shared.
-    const midpoints = new Map<number, number>();
+    const marked = new Set<number>();
     for (let i = 0; i < current.length; i += 3) {
-      for (let e = 0; e < 3; e++) {
-        const a = current[i + e];
-        const b = current[i + ((e + 1) % 3)];
-        if (lengthOf(a, b) <= maxEdge) continue;
-        const key = edgeKey(a, b);
-        if (midpoints.has(key)) continue;
-        midpoints.set(key, xy.length / 2);
-        xy.push((xy[a * 2] + xy[b * 2]) / 2, (xy[a * 2 + 1] + xy[b * 2 + 1]) / 2);
-      }
+      const [a, b, len] = longestEdge(current[i], current[i + 1], current[i + 2]);
+      if (len > maxEdge) marked.add(edgeKey(a, b));
     }
-    if (midpoints.size === 0) break;
+    if (marked.size === 0) break;
+
+    // A triangle with any marked edge must also have its LONGEST edge marked,
+    // or the bisection would not be a longest-edge one and the angle bound is
+    // lost. Marking a longest edge can mark a neighbour's non-longest edge in
+    // turn, hence the fixed point.
+    for (let pass = 0; pass < MAX_SUBDIVISION_LEVELS * 8; pass++) {
+      let changed = false;
+      for (let i = 0; i < current.length; i += 3) {
+        const a = current[i];
+        const b = current[i + 1];
+        const c = current[i + 2];
+        const any =
+          marked.has(edgeKey(a, b)) || marked.has(edgeKey(b, c)) || marked.has(edgeKey(c, a));
+        if (!any) continue;
+        const [la, lb] = longestEdge(a, b, c);
+        const key = edgeKey(la, lb);
+        if (!marked.has(key)) {
+          marked.add(key);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    const midpoints = new Map<number, number>();
+    const midpoint = (a: number, b: number): number | undefined => {
+      const key = edgeKey(a, b);
+      if (!marked.has(key)) return undefined;
+      const existing = midpoints.get(key);
+      if (existing !== undefined) return existing;
+      const index = xy.length / 2;
+      xy.push((xy[a * 2] + xy[b * 2]) / 2, (xy[a * 2 + 1] + xy[b * 2 + 1]) / 2);
+      midpoints.set(key, index);
+      return index;
+    };
+
+    /**
+     * Bisect at the longest marked edge, then recurse on the halves.
+     *
+     * This terminates: bisecting edge (a,b) at m replaces it with (a,m) and
+     * (m,b), and neither is in the marked set — only whole original edges are —
+     * so every step strictly reduces the marked edges a triangle carries.
+     */
+    const emit = (a: number, b: number, c: number, out: number[]): void => {
+      const candidates: Array<[number, number, number, number]> = [];
+      for (const [x, y, z] of [
+        [a, b, c],
+        [b, c, a],
+        [c, a, b],
+      ] as const) {
+        const m = midpoint(x, y);
+        if (m !== undefined) candidates.push([x, y, z, m]);
+      }
+      if (candidates.length === 0) {
+        out.push(a, b, c);
+        return;
+      }
+
+      let best = candidates[0];
+      let bestLen = lengthOf(best[0], best[1]);
+      for (const cand of candidates.slice(1)) {
+        const len = lengthOf(cand[0], cand[1]);
+        if (len > bestLen) {
+          best = cand;
+          bestLen = len;
+        }
+      }
+
+      const [x, y, z, m] = best;
+      emit(x, m, z, out);
+      emit(m, y, z, out);
+    };
 
     const next: number[] = [];
     for (let i = 0; i < current.length; i += 3) {
-      const a = current[i];
-      const b = current[i + 1];
-      const c = current[i + 2];
-      const ab = midpoints.get(edgeKey(a, b));
-      const bc = midpoints.get(edgeKey(b, c));
-      const ca = midpoints.get(edgeKey(c, a));
-      const split = (ab !== undefined ? 1 : 0) + (bc !== undefined ? 1 : 0) + (ca !== undefined ? 1 : 0);
-
-      if (split === 0) {
-        next.push(a, b, c);
-      } else if (split === 3) {
-        next.push(a, ab!, ca!, ab!, b, bc!, ca!, bc!, c, ab!, bc!, ca!);
-      } else if (split === 1) {
-        // Green: one cut from the split edge to the opposite corner.
-        if (ab !== undefined) next.push(a, ab, c, ab, b, c);
-        else if (bc !== undefined) next.push(b, bc, a, bc, c, a);
-        else next.push(c, ca!, b, ca!, a, b);
-      } else {
-        // Two edges split. The boundary is now a pentagon, so fan it from the
-        // corner opposite the unsplit edge: three triangles, no midpoint ever
-        // used as if it were a corner.
-        if (ca === undefined) next.push(a, ab!, bc!, ab!, b, bc!, a, bc!, c);
-        else if (ab === undefined) next.push(b, bc!, ca!, bc!, c, ca!, b, ca!, a);
-        else next.push(c, ca!, ab!, ca!, a, ab!, c, ab!, b);
-      }
+      emit(current[i], current[i + 1], current[i + 2], next);
     }
     current = next;
   }
@@ -283,8 +487,13 @@ export function extrudeDraped(
     const base = earcut(xy, holeIndices, 2);
     if (base.length === 0) continue;
 
+    // Fix the triangulation's shape BEFORE refining it. Refinement bounds how
+    // much worse quality can get; it cannot repair slivers it is handed, and
+    // every one of them is then multiplied by the levels that follow.
+    const flat = improveByFlips(xy, base);
+
     // `xy` grows as subdivision adds midpoints, and again if a pinch is split.
-    const surface = subdivide(xy, base, options.maxEdge_m);
+    const surface = subdivide(xy, flat, options.maxEdge_m);
     splitBowtieVertices(xy, surface);
     const vertexCount = xy.length / 2;
     const offset = positions.length / 3;

@@ -121,8 +121,25 @@ describe('buildPolygonLayer — buildings', () => {
     const a = buildPolygonLayer('buildings', [withHole], options);
     const b = buildPolygonLayer('buildings', [solid], options);
 
-    // A hole means more geometry, not less, and must stay closed.
-    expect(a.stats.triangles).toBeGreaterThan(b.stats.triangles);
+    // Triangle counts say nothing here — refinement fills both to the same
+    // density. What matters is that the courtyard is a real void, so the solid
+    // encloses less volume than the same footprint without it.
+    const volume = (part: { positions: Float32Array; indices: Uint32Array }) => {
+      const { positions: p, indices: t } = part;
+      let v = 0;
+      for (let i = 0; i < t.length; i += 3) {
+        const x = t[i] * 3;
+        const y = t[i + 1] * 3;
+        const z = t[i + 2] * 3;
+        v +=
+          p[x] * (p[y + 1] * p[z + 2] - p[y + 2] * p[z + 1]) -
+          p[x + 1] * (p[y] * p[z + 2] - p[y + 2] * p[z]) +
+          p[x + 2] * (p[y] * p[z + 1] - p[y + 1] * p[z]);
+      }
+      return Math.abs(v) / 6;
+    };
+    expect(volume(a.part!)).toBeLessThan(volume(b.part!));
+
     const v = validateMesh(a.part!.positions, a.part!.indices);
     expect(v.openEdges).toBe(0);
     expect(v.nonManifoldEdges).toBe(0);
