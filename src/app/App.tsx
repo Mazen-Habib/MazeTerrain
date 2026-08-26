@@ -11,7 +11,7 @@
  * mid-phase would be a refactor with no user-visible payoff. Worth revisiting
  * when Phase 2 adds forty layer controls.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEM_DATASETS } from '../data/dem/datasets';
 import { BED_PRESETS, defaultConfig, PRESETS } from '../config/presets';
 import { GpxParseError, parseGpxText } from '../data/gpx/parse';
@@ -49,6 +49,15 @@ import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
 import { LayersPanel } from './LayersPanel';
+import { ProjectPanel } from './ProjectPanel';
+import {
+  ProjectError,
+  decodeHash,
+  encodeHash,
+  parseProject,
+  serialiseProject,
+  type Settings,
+} from '../config/project';
 import type { LayerId } from '../data/osm/tags';
 import type { LayerSettings } from '../geometry/features';
 
@@ -98,6 +107,15 @@ function toSerialisable(routes: Route[]): SerialisableRoute[] {
   }));
 }
 
+/**
+ * A shared link, decoded once.
+ *
+ * At module scope rather than in an effect so the app never paints the default
+ * model and then jumps to the shared one: by the time anything renders, this is
+ * already the initial state. Null when the hash is absent or unreadable.
+ */
+const SHARED = typeof window === 'undefined' ? null : decodeHash(window.location.hash);
+
 function slugify(name: string): string {
   return (
     name
@@ -116,11 +134,12 @@ export function App() {
    * with nothing selected — resetting to some default shape would just be a
    * differently-placed box the user then has to remove again.
    */
-  const [shape, setShape] = useState<SelectionShape | null>(() => ({
-    kind: 'rectangle',
-    bbox: PRESETS[0].bbox,
-  }));
-  const [areaLabel, setAreaLabel] = useState(PRESETS[0].label);
+  const [shape, setShape] = useState<SelectionShape | null>(() =>
+    SHARED ? SHARED.shape : { kind: 'rectangle', bbox: PRESETS[0].bbox },
+  );
+  const [areaLabel, setAreaLabel] = useState(() =>
+    SHARED ? SHARED.areaLabel : PRESETS[0].label,
+  );
   const [tool, setTool] = useState<DrawTool | null>(null);
   const [basemapId, setBasemapId] = useState(BASEMAPS[0].id);
   const [terrain3d, setTerrain3d] = useState(false);
@@ -130,7 +149,8 @@ export function App() {
   const [cursor, setCursor] = useState<LonLat | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
 
-  const [settings, setSettings] = useState<Omit<GenerateConfig, 'bbox'>>(() => {
+  const [settings, setSettings] = useState<Settings>(() => {
+    if (SHARED) return SHARED.settings;
     const { bbox: _bbox, ...rest } = defaultConfig(PRESETS[0].bbox);
     return rest;
   });
@@ -387,6 +407,75 @@ export function App() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, []);
+
+  // --- project save / load / share ----------------------------------------
+  //
+  // The hash tracks the current state so the address bar is always a working
+  // link, without the user having to remember to copy one.
+  //
+  // replaceState, not pushState. The spec calls the hash "undo-by-history",
+  // but a slider drag would push a hundred entries and bury whatever the user
+  // was actually doing before they opened the app. A shareable URL is the part
+  // that earns its keep; browser-level undo of a slider is not worth that.
+  // (Deviation noted in docs/02-feature-spec.md F7.3.)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const hash = encodeHash({ areaLabel, shape, settings });
+        window.history.replaceState(null, '', `#${hash}`);
+      } catch {
+        // An unshareable URL must never break the app it describes.
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [areaLabel, shape, settings]);
+
+  const onSaveProject = useCallback(() => {
+    const text = serialiseProject({ areaLabel, shape, settings, routes });
+    save(new TextEncoder().encode(text).buffer as ArrayBuffer, `${slugify(areaLabel)}.mzt`, 'application/json');
+  }, [areaLabel, shape, settings, routes, save]);
+
+  const onLoadProject = useCallback(async (file: File) => {
+    setError(null);
+    try {
+      const project = parseProject(await file.text());
+      setSettings(project.settings);
+      setShape(project.shape);
+      setAreaLabel(project.areaLabel);
+      setRoutes(project.routes);
+      // The loaded settings describe a model that has not been built yet.
+      setBundle(null);
+      setDirty(true);
+      if (project.shape) setFitNonce((n) => n + 1);
+    } catch (err) {
+      setError(
+        err instanceof ProjectError ? err.userMessage : `Could not open that project: ${String(err)}`,
+      );
+    }
+  }, []);
+
+  const onCopyLink = useCallback(async () => {
+    const url = `${window.location.origin}${window.location.pathname}#${encodeHash({
+      areaLabel,
+      shape,
+      settings,
+    })}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      return true;
+    } catch {
+      // Clipboard access is refused outside a secure context and in some
+      // browsers without a user gesture. Put the link where it can be copied
+      // by hand rather than failing silently.
+      window.prompt('Copy this link:', url);
+      return false;
+    }
+  }, [areaLabel, shape, settings]);
+
+  const onApplyPreset = useCallback((preset: Settings) => {
+    setSettings(preset);
+    setDirty(true);
   }, []);
 
   const onDownload = useCallback(() => {
@@ -931,6 +1020,16 @@ export function App() {
               </dl>
             </section>
           ) : null}
+
+          <ProjectPanel
+            busy={busy}
+            settings={settings}
+            routeCount={routes.length}
+            onSave={onSaveProject}
+            onLoad={(file) => void onLoadProject(file)}
+            onCopyLink={onCopyLink}
+            onApplyPreset={onApplyPreset}
+          />
 
           {bundle ? <Results bundle={bundle} dirty={dirty} /> : null}
           {error ? (

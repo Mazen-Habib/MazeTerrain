@@ -859,3 +859,28 @@ body {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* Project save / load / presets. */
+.projectRow {
+  margin-bottom: 4px;
+}
+
+.projectRow .btn {
+  flex: 1;
+}
+
+.textInput {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.textInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
