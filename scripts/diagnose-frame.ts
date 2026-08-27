@@ -8,13 +8,14 @@
 import { buildFrame } from '../src/geometry/frame';
 import { buildClippedTerrainMesh } from '../src/geometry/terrainClip';
 import { buildTerrainMesh } from '../src/geometry/terrain';
-import { selectionRingWorld, bboxRingWorld } from '../src/geometry/selection';
+import { selectionRingWorld } from '../src/geometry/selection';
 import { unionParts } from '../src/geometry/boolean';
 import { validateMesh } from '../src/geometry/validate';
 import { unprojectENU } from '../src/geometry/coords';
 import { makeHeightfield, scaleFor } from '../tests/helpers';
 import type { MeshPart } from '../src/geometry/types';
 import type { SelectionShape } from '../src/geometry/selection';
+import type { Ring } from '../src/geometry/polygons';
 
 const bbox = { west: 7.62, south: 45.94, east: 7.74, north: 46.02 };
 const cells = 200;
@@ -28,6 +29,17 @@ const scale = scaleFor(hf, { bbox });
 
 console.log(`\nmodel ${(( cells - 1) * hf.spacingX_m * scale.scale).toFixed(1)} mm across`);
 console.log(`relief ${hf.min_m.toFixed(0)}..${hf.max_m.toFixed(0)} m, base 3 mm`);
+
+/** Longest XY edge of a mesh, print mm. */
+function extentOf(positions: Float32Array): number {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < positions.length; i += 3) {
+    lo = Math.min(lo, positions[i]);
+    hi = Math.max(hi, positions[i]);
+  }
+  return hi - lo;
+}
 
 /** Connected components over welded positions. */
 function componentSizes(positions: Float32Array, indices: Uint32Array): number[] {
@@ -85,9 +97,19 @@ const shapes: Array<[string, SelectionShape | null]> = [
   ],
 ];
 
-console.log('\nshape      width  frame tris  union tris  parts  largest%  open  nonMan');
+console.log('\nshape      width  frame tris  union tris  parts  largest%  open  nonMan   model mm');
 for (const [label, shape] of shapes) {
-  const ring = shape ? selectionRingWorld(shape, scale.origin) : bboxRingWorld(bbox, scale.origin);
+  // The GRID's own boundary for the rectangle case, not the bbox ring: this
+  // fixture's synthetic heightfield is larger than the bbox it is labelled
+  // with, and mixing the two makes the frame look wrong when it is not.
+  const ring: Ring = shape
+    ? selectionRingWorld(shape, scale.origin)
+    : [
+        [-half, -half],
+        [half, -half],
+        [half, half],
+        [-half, half],
+      ];
   const terrain = shape ? buildClippedTerrainMesh(hf, scale, ring) : buildTerrainMesh(hf, scale);
 
   for (const width_mm of [3, 8, 16]) {
@@ -110,7 +132,8 @@ for (const [label, shape] of shapes) {
       `${label.padEnd(10)} ${String(width_mm).padStart(4)}  ${String(frame.mesh.triangles).padStart(10)}` +
         `  ${String(total).padStart(10)}  ${String(comps.length).padStart(5)}` +
         `  ${((comps[0] / total) * 100).toFixed(1).padStart(7)}%` +
-        `  ${String(v.openEdges).padStart(4)}  ${String(v.nonManifoldEdges).padStart(6)}`,
+        `  ${String(v.openEdges).padStart(4)}  ${String(v.nonManifoldEdges).padStart(6)}` +
+        `   ${extentOf(merged.positions).toFixed(1).padStart(6)}`,
     );
   }
 }

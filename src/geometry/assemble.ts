@@ -19,7 +19,7 @@ import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
 import { traceContours, suggestInterval } from './contours';
 import { buildFrame, frameSubmersion } from './frame';
-import { buildLabelTool, labelCoverage } from './label';
+import { buildBaseline, buildLabelTool, labelCoverage } from './label';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
 import type { MultiPolygon } from './polygons';
 import { extrudeDraped } from './extrude';
@@ -34,6 +34,7 @@ import { fetchOsm, OverpassError } from '../data/osm/overpass';
 import { normalise } from '../data/osm/normalise';
 import { LAYER_BY_ID, type LayerId } from '../data/osm/tags';
 import { bboxRingWorld, selectionRingWorld, type SelectionShape } from './selection';
+import type { Ring } from './polygons';
 import type { Route } from '../data/gpx/types';
 import type {
   GenerateConfig,
@@ -709,17 +710,23 @@ export async function assemble(
         const options = {
           capHeight_mm,
           depth_mm: Math.min(config.label.depth_mm, config.frame.height_mm * 0.75),
-          strokeWidth_mm: config.nozzleDiameter_mm,
+          strokeWidth_mm: config.label.strokeWidth_mm,
+          minStrokeWidth_mm: config.nozzleDiameter_mm,
           surfaceZ_mm: built.top_mm,
-          // The model is centred on the origin in print space, and the label
-          // sits on the bottom rim, centred in the band's width.
-          centreX_mm: 0,
-          baselineY_mm:
-            -((heightfield.rows - 1) * heightfield.spacingY_m * scale.scale) / 2 +
-            (config.frame.width_mm - capHeight_mm) / 2,
         };
 
-        const label = buildLabelTool(labelText, options);
+        // Set along the frame itself, so a circular model gets curved text
+        // rather than a straight line running off the band at both ends. The
+        // baseline sits so the text is centred across the band's width, with
+        // its top towards the model.
+        const ringPrint: Ring = featureClip.map(
+          ([x_m, y_m]) => [x_m * scale.scale, y_m * scale.scale] as [number, number],
+        );
+        const baseline = buildBaseline(ringPrint, (config.frame.width_mm + capHeight_mm) / 2);
+
+        const label = baseline
+          ? buildLabelTool(labelText, options, baseline)
+          : { mesh: { positions: new Float32Array(0), indices: new Uint32Array(0), triangles: 0 }, width_mm: 0, strokeWidth_mm: 0, missing: [] as string[] };
         if (label.missing.length > 0) {
           warnings.push({
             level: 'warn',
@@ -732,15 +739,16 @@ export async function assemble(
         }
 
         if (label.mesh.triangles > 0) {
-          const coverage = labelCoverage(labelText, options, built.footprint_mm);
+          const coverage = labelCoverage(labelText, options, baseline!, built.footprint_mm);
           if (coverage < LABEL_COVERAGE_LIMIT) {
             warnings.push({
               level: 'warn',
               code: 'label-overruns-frame',
               message:
                 `Only ${(coverage * 100).toFixed(0)}% of the label lands on the frame — the rest ` +
-                `engraves nothing. It is ${label.width_mm.toFixed(0)} mm wide. Shorten the text, ` +
-                `reduce the label size, or widen the frame.`,
+                `engraves nothing. It is ${label.width_mm.toFixed(0)} mm wide, on a ` +
+                `${baseline!.total_mm.toFixed(0)} mm rim. Shorten the text, reduce the label ` +
+                `size, or make the model larger.`,
             });
           }
 

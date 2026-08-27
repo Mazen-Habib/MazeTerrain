@@ -5,24 +5,29 @@
  * gives the print a clean edge, and its top face is the flat area a label is
  * engraved into (F5.1).
  *
- * Inside the boundary, not outside it: `modelWidth_mm` is documented as the
- * longest edge of the printed model, and a frame added on the outside would
- * quietly make a "100 mm" model 116 mm and fail a bed check for a reason the
- * user could not see. Covering the outermost band of terrain costs the least
- * interesting part of the map and keeps that promise honest.
+ * OUTSIDE the boundary, added to the model rather than taken out of it.
  *
- * The band is traced as a distance-field level set of the boundary, clipped to
- * the boundary — the same machinery roads and contours use. That is what makes
- * it work for a hand-drawn polygon and a circle, not just a rectangle. Inner
- * corners come out rounded by the band's own width, which is what a routed
- * wooden frame looks like anyway.
+ * It was built inside first, on the reasoning that `modelWidth_mm` is
+ * documented as the longest edge of the print and a frame outside would make a
+ * "100 mm" model 125 mm. That was the wrong trade: a 12.5 mm frame ate a
+ * quarter of the map on every side, which is the part of the model people
+ * actually want. The map keeps its full size and the frame surrounds it, the
+ * way a frame surrounds a picture. Reported dimensions are measured across
+ * every part, so the extra size shows up honestly in the stats and in the bed
+ * check rather than being hidden.
+ *
+ * The band comes from a distance-field level set of the boundary, which for a
+ * closed loop is an annulus: its outer contour is the boundary offset outward
+ * by the frame width, and that is exactly the frame's outer edge. Pairing that
+ * contour with the boundary itself as a hole gives the band with no polygon
+ * offsetting code and no boolean, and it works for a hand-drawn polygon and a
+ * circle rather than only a rectangle.
  *
  * OPEN-QUESTIONS Q15 (resolved 2026-08-27): there is no separate "brim". A brim
  * is a bed-adhesion setting and belongs to the slicer; a narrow frame is the
  * decorative lip the spec called one.
  */
 import { buildRibbonField } from './ribbonField';
-import { clipMultiPolygonToRing } from './clip';
 import { extrudeDraped, type SolidMesh } from './extrude';
 import type { MultiPolygon, Ring } from './polygons';
 import type { ResolvedScale } from './coords';
@@ -78,17 +83,15 @@ export function buildFrame(ring: Ring, options: FrameOptions): FrameResult {
   // point where the boundary meets itself.
   const closed: Ring = ring[0] === ring[ring.length - 1] ? ring : [...ring, ring[0]];
 
-  // Traced at twice the width, straddling the boundary, then cut back to the
-  // boundary EXACTLY. Not with the ribbon field's own selection clip: that one
-  // drops whole cells, and its cell here is a sixth of the frame width — 1.3 mm
-  // on an 8 mm frame, which on an outside edge is plainly visible. It is well
-  // under a nozzle for a road, which is the case it was written for.
-  //
-  // The inner edge needs none of this. It is a level set between two finite
-  // distances, so marching squares interpolates it smoothly.
+  // The level set of a closed loop at distance `width` is an annulus straddling
+  // it. Its OUTER contour is the boundary pushed out by the frame width — the
+  // frame's outer edge, exactly, with no offsetting code to get wrong. Pair it
+  // with the boundary itself as a hole and the band is the region between them.
   const band = buildRibbonField([closed], width_m * 2, null, CELLS_PER_HALF_WIDTH);
-  const polygons = clipMultiPolygonToRing(band.polygons, ring);
-  if (polygons.length === 0) return { mesh: EMPTY, top_mm, footprint_mm: [] };
+  const outer = largestContour(band.polygons);
+  if (!outer) return { mesh: EMPTY, top_mm, footprint_mm: [] };
+
+  const polygons: MultiPolygon = [[outer, ring]];
 
   const mesh = extrudeDraped(
     polygons,
@@ -117,6 +120,33 @@ export function buildFrame(ring: Ring, options: FrameOptions): FrameResult {
   );
 
   return { mesh, top_mm, footprint_mm };
+}
+
+/**
+ * The outermost contour among a set of polygons, by absolute area.
+ *
+ * The level set can produce more than one piece on a boundary that pinches;
+ * the frame's outer edge is the largest of them.
+ */
+function largestContour(polygons: MultiPolygon): Ring | null {
+  let best: Ring | null = null;
+  let bestArea = 0;
+  for (const polygon of polygons) {
+    const ring = polygon[0];
+    if (!ring || ring.length < 3) continue;
+    let twice = 0;
+    for (let i = 0; i < ring.length; i++) {
+      const p = ring[i];
+      const q = ring[(i + 1) % ring.length];
+      twice += p[0] * q[1] - q[0] * p[1];
+    }
+    const area = Math.abs(twice / 2);
+    if (area > bestArea) {
+      bestArea = area;
+      best = ring;
+    }
+  }
+  return best;
 }
 
 /**

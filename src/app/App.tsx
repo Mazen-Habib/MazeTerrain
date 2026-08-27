@@ -722,7 +722,7 @@ export function App() {
                   step={0.5}
                   disabled={busy}
                   onChange={(v) => update({ frame: { ...config.frame, width_mm: v } })}
-                  hint={`Taken out of the ${config.modelWidth_mm} mm, not added to it, so the model stays the size you asked for.`}
+                  hint={`Added outside the map, so the print comes out ${(config.modelWidth_mm + config.frame.width_mm * 2).toFixed(0)} mm across. The map keeps its full ${config.modelWidth_mm} mm.`}
                 />
                 <NumberField
                   label="Frame height"
@@ -750,9 +750,9 @@ export function App() {
                     onChange={(e) => update({ label: { ...config.label, text: e.target.value } })}
                   />
                   <p className="field__hint">
-                    Cut into the frame&rsquo;s top face, along the bottom edge. A single-stroke
-                    engraving font: capitals, digits and common punctuation, so lowercase is
-                    set as capitals.
+                    Cut into the frame&rsquo;s top face, following the frame round the bottom
+                    of the model. A single-stroke engraving font: capitals, digits and common
+                    punctuation, so lowercase is set as capitals.
                   </p>
                 </div>
 
@@ -780,6 +780,43 @@ export function App() {
                       onChange={(v) => update({ label: { ...config.label, depth_mm: v } })}
                       hint="At least two or three layers, or the groove will not read."
                     />
+
+                    <div className="field">
+                      <label className="field__label">
+                        Stroke weight<span className="field__unit">mm</span>
+                      </label>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={config.label.strokeWidth_mm === 'auto'}
+                          disabled={busy}
+                          onChange={(e) =>
+                            update({
+                              label: {
+                                ...config.label,
+                                strokeWidth_mm: e.target.checked
+                                  ? 'auto'
+                                  : Number((config.label.capHeight_mm / 7).toFixed(2)),
+                              },
+                            })
+                          }
+                        />
+                        Auto (bold — a seventh of the label size)
+                      </label>
+                    </div>
+                    {config.label.strokeWidth_mm === 'auto' ? null : (
+                      <NumberField
+                        label="Stroke width"
+                        unit="mm"
+                        value={config.label.strokeWidth_mm}
+                        min={0.1}
+                        max={4}
+                        step={0.05}
+                        disabled={busy}
+                        onChange={(v) => update({ label: { ...config.label, strokeWidth_mm: v } })}
+                        hint={`Never thinner than the ${config.nozzleDiameter_mm} mm nozzle, and capped so the letters do not weld shut.`}
+                      />
+                    )}
                   </>
                 ) : null}
               </>

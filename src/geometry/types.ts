@@ -175,6 +175,15 @@ export interface LabelSettings {
   capHeight_mm: number;
   /** How deep the groove cuts, print mm. */
   depth_mm: number;
+  /**
+   * Groove width, or 'auto' for a weight proportional to the cap height.
+   *
+   * A single-stroke font gives a hairline if left alone, and 0.4 mm of groove
+   * on a 100 mm model is invisible on screen and barely there in the print.
+   * 'auto' is a seventh of the cap height — a normal bold text weight — and is
+   * the default for that reason.
+   */
+  strokeWidth_mm: number | 'auto';
 }
 
 export interface GenerateConfig {

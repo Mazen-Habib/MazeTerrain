@@ -171,8 +171,21 @@ const GLYPHS: Record<string, Glyph> = {
 /** A polyline in print millimetres. */
 export type StrokePath = Array<[number, number]>;
 
+/** One character, laid out with its own origin on the baseline at x = 0. */
+export interface LaidGlyph {
+  char: string;
+  /** Where the glyph's pen origin sits along the run, print mm. */
+  x_mm: number;
+  /** The glyph's own advance, print mm. */
+  advance_mm: number;
+  /** Strokes in glyph-local coordinates: x from the pen origin, y from the baseline. */
+  paths: StrokePath[];
+}
+
 export interface TextLayout {
   paths: StrokePath[];
+  /** The same strokes, kept per character, for setting text along a curve. */
+  glyphs: LaidGlyph[];
   /** Total advance, print mm. */
   width_mm: number;
   /** Cap height as laid out, print mm. */
@@ -189,6 +202,7 @@ export interface TextLayout {
 export function layoutText(text: string, capHeight_mm: number): TextLayout {
   const scale = capHeight_mm / CAP_HEIGHT;
   const paths: StrokePath[] = [];
+  const glyphs: LaidGlyph[] = [];
   const missing: string[] = [];
   let cursor = 0;
 
@@ -203,19 +217,31 @@ export function layoutText(text: string, capHeight_mm: number): TextLayout {
       continue;
     }
 
+    const local: StrokePath[] = [];
     for (const stroke of glyph.strokes) {
+      const run: StrokePath = [];
       const path: StrokePath = [];
       for (let i = 0; i < stroke.length; i += 2) {
+        run.push([stroke[i] * scale, stroke[i + 1] * scale]);
         path.push([(cursor + stroke[i]) * scale, stroke[i + 1] * scale]);
       }
-      if (path.length >= 2) paths.push(path);
+      if (path.length >= 2) {
+        paths.push(path);
+        local.push(run);
+      }
     }
+    glyphs.push({
+      char,
+      x_mm: cursor * scale,
+      advance_mm: glyph.advance * scale,
+      paths: local,
+    });
     cursor += glyph.advance + TRACKING;
   }
 
   // The trailing tracking is not part of the text's width.
   const width = Math.max(0, cursor - TRACKING) * scale;
-  return { paths, width_mm: width, height_mm: capHeight_mm, missing };
+  return { paths, glyphs, width_mm: width, height_mm: capHeight_mm, missing };
 }
 
 /** Characters this font can draw, for the UI to say what it accepts. */

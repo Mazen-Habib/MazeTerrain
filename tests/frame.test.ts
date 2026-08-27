@@ -81,24 +81,24 @@ describe('buildFrame', () => {
   });
 
   /**
-   * The reason it is built inside rather than outside: modelWidth_mm is
-   * documented as the longest edge of the printed model, and a frame added
-   * outside would quietly make a 100 mm model 116 mm.
+   * It was built INSIDE first, so that `modelWidth_mm` stayed literally the
+   * longest edge of the print. That was the wrong trade: a 12.5 mm frame ate a
+   * quarter of the map on every side. The map keeps its size and the frame is
+   * added around it, exactly as a frame surrounds a picture.
    */
-  it('stays inside the boundary, so the model does not grow', () => {
+  it('is added outside the boundary, so the map keeps its full size', () => {
     const modelExtent = half_m * 2 * scale.scale;
-    expect(xyExtent(built.mesh.positions)).toBeLessThanOrEqual(modelExtent + 1e-3);
+    expect(xyExtent(built.mesh.positions)).toBeCloseTo(modelExtent + options.width_mm * 2, 1);
   });
 
-  it('leaves the middle of the model open', () => {
-    // Nothing within the frame's own width of the centre.
+  it('leaves the whole map open, taking nothing out of the middle', () => {
+    // The band's inner edge is the boundary itself: nothing reaches inside it.
     let nearest = Infinity;
     const p = built.mesh.positions;
     for (let i = 0; i < p.length; i += 3) {
-      nearest = Math.min(nearest, Math.hypot(p[i], p[i + 1]));
+      nearest = Math.min(nearest, Math.max(Math.abs(p[i]), Math.abs(p[i + 1])));
     }
-    const modelHalf = half_m * scale.scale;
-    expect(nearest).toBeGreaterThan(modelHalf - options.width_mm * 2);
+    expect(nearest).toBeCloseTo(half_m * scale.scale, 1);
   });
 
   it('frames a circle as readily as a box', () => {
@@ -113,16 +113,8 @@ describe('buildFrame', () => {
     expect(countRing(wide.mesh.positions)).toBeGreaterThan(0);
     expect(zRange(wide.mesh.positions)[1]).toBeCloseTo(zRange(built.mesh.positions)[1], 4);
 
-    // A wider band reaches further in.
-    let wideNearest = Infinity;
-    for (let i = 0; i < wide.mesh.positions.length; i += 3) {
-      wideNearest = Math.min(wideNearest, Math.hypot(wide.mesh.positions[i], wide.mesh.positions[i + 1]));
-    }
-    let narrowNearest = Infinity;
-    for (let i = 0; i < built.mesh.positions.length; i += 3) {
-      narrowNearest = Math.min(narrowNearest, Math.hypot(built.mesh.positions[i], built.mesh.positions[i + 1]));
-    }
-    expect(wideNearest).toBeLessThan(narrowNearest);
+    // A wider band reaches further OUT, and its inner edge does not move.
+    expect(xyExtent(wide.mesh.positions)).toBeGreaterThan(xyExtent(built.mesh.positions));
   });
 
   it('builds nothing rather than something wrong when it is switched off', () => {

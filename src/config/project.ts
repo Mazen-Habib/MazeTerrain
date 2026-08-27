@@ -180,6 +180,7 @@ export function restoreSettings(raw: unknown): Settings {
       text: str(label.text, base.label.text),
       capHeight_mm: num(label.capHeight_mm, base.label.capHeight_mm),
       depth_mm: num(label.depth_mm, base.label.depth_mm),
+      strokeWidth_mm: numOrAuto(label.strokeWidth_mm, base.label.strokeWidth_mm),
     },
     layers: restoreLayers(raw.layers),
   };
