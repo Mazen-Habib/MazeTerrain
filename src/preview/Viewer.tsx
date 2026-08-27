@@ -9,6 +9,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { MeshBundle } from '../geometry/types';
 
 export type ShadingMode = 'natural' | 'elevation' | 'slope' | 'wireframe';
@@ -24,6 +25,46 @@ const UP = new THREE.Vector3(0, 0, 1);
 
 /** F7.1: "Default camera: south-facing, looking north, ~40° elevation." */
 const CAMERA_ELEVATION_RAD = (40 * Math.PI) / 180;
+
+/**
+ * Above this angle between two faces, the edge between them is a real edge and
+ * must not be smoothed away.
+ *
+ * Measured on the parts themselves: a prism's top meets its wall at 90 degrees
+ * and an engraved groove at up to 116, while adjacent triangles on sampled
+ * terrain sit well below 50. So 50 separates "this is a corner" from "this is a
+ * surface" without faceting the relief.
+ */
+const CREASE_ANGLE_RAD = (50 * Math.PI) / 180;
+
+/**
+ * Vertices above which creasing is too expensive to be worth it.
+ *
+ * Creasing splits vertices — six-fold in practice — so a large part costs both
+ * time and memory: measured at 152 ms and 36 MB for 252 k vertices, and 422 ms
+ * and 97 MB for 676 k. Parts past this take the cheap route instead.
+ */
+const CREASE_VERTEX_BUDGET = 150_000;
+
+export type ShadingPlan = 'crease' | 'smooth' | 'flat';
+
+/**
+ * How a part should be shaded.
+ *
+ * - `crease` splits normals at real edges only: relief stays smooth and corners
+ *   stay corners. Correct for everything, but it splits vertices six-fold, so it
+ *   is budgeted.
+ * - `smooth` averages every face. Softens edges, but faceting a sampled surface
+ *   looks far worse than a slightly soft rim.
+ * - `flat` shades each face by its own normal, in the shader, for nothing. An
+ *   extruded solid IS flat everywhere, so this is exactly right for one.
+ */
+export function chooseShading(name: string, vertexCount: number): ShadingPlan {
+  if (vertexCount <= CREASE_VERTEX_BUDGET) return 'crease';
+  // 'terrain' is the DEM alone; 'model' is the single-colour body, which
+  // contains it. Both are surfaces first and solids second.
+  return name === 'terrain' || name === 'model' ? 'smooth' : 'flat';
+}
 
 function terrainRamp(t: number, out: THREE.Color): THREE.Color {
   // Low ground green, through tan, to bare rock and snow.
@@ -196,10 +237,28 @@ export function Viewer({ bundle, shading, autoSpin }: ViewerProps) {
     }
 
     for (const part of bundle.parts) {
-      const geometry = new THREE.BufferGeometry();
+      let geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3));
       geometry.setIndex(new THREE.BufferAttribute(part.indices, 1));
-      geometry.computeVertexNormals();
+
+      // How the surface is shaded, decided per part.
+      //
+      // computeVertexNormals alone averages every face meeting at a vertex, and
+      // extrudeDraped deliberately shares vertices between a solid's top face
+      // and its vertical walls. Every one of the frame's vertices and every one
+      // of an engraved label's therefore had a horizontal normal averaged with
+      // a vertical one, and the viewer drew 90-degree edges as fillets — while
+      // the STL, which stores a normal per facet, came out crisp. That mismatch
+      // is exactly what F7.1 says must never happen.
+      // See docs/08-pitfalls.md#the-viewer-smooths-away-every-hard-edge.
+      const plan = chooseShading(part.name, part.positions.length / 3);
+      if (plan === 'crease') {
+        // Returns a NON-indexed geometry, which is why it is budgeted.
+        geometry = toCreasedNormals(geometry, CREASE_ANGLE_RAD);
+      } else {
+        geometry.computeVertexNormals();
+      }
+      const flatShading = plan === 'flat';
 
       let material: THREE.Material;
       if (shading === 'wireframe') {
@@ -209,7 +268,7 @@ export function Viewer({ bundle, shading, autoSpin }: ViewerProps) {
           color: part.color,
           roughness: 0.92,
           metalness: 0,
-          flatShading: false,
+          flatShading,
         });
       } else {
         buildColours(geometry, shading, minZ, maxZ);
@@ -217,6 +276,7 @@ export function Viewer({ bundle, shading, autoSpin }: ViewerProps) {
           vertexColors: true,
           roughness: 0.92,
           metalness: 0,
+          flatShading,
         });
       }
 
