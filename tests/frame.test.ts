@@ -117,6 +117,34 @@ describe('buildFrame', () => {
     expect(xyExtent(wide.mesh.positions)).toBeGreaterThan(xyExtent(built.mesh.positions));
   });
 
+  /**
+   * A distance-field level set is a true parallel offset, which rounds every
+   * convex corner. A rectangular map came out with rounded outer corners
+   * against square inner ones — not what a picture frame looks like.
+   */
+  it('carries a square corner to a point instead of rounding it', () => {
+    const corner = half_m * scale.scale + options.width_mm;
+    let furthest = 0;
+    const p = built.mesh.positions;
+    for (let i = 0; i < p.length; i += 3) {
+      furthest = Math.max(furthest, Math.hypot(p[i], p[i + 1]));
+    }
+    // A mitred corner reaches the full diagonal; a rounded one falls short of it
+    // by (sqrt(2) - 1) x width, which is 3.3 mm on this frame.
+    expect(furthest).toBeCloseTo(Math.hypot(corner, corner), 1);
+  });
+
+  it('agrees with a true offset on a circle, where there are no corners to mitre', () => {
+    const radius = half_m * 0.9;
+    const round = buildFrame(circleRing(radius), options);
+    let furthest = 0;
+    const p = round.mesh.positions;
+    for (let i = 0; i < p.length; i += 3) {
+      furthest = Math.max(furthest, Math.hypot(p[i], p[i + 1]));
+    }
+    expect(furthest).toBeCloseTo(radius * scale.scale + options.width_mm, 0);
+  });
+
   it('builds nothing rather than something wrong when it is switched off', () => {
     expect(buildFrame(boxRing(half_m), { ...options, width_mm: 0 }).mesh.triangles).toBe(0);
     expect(buildFrame(boxRing(half_m), { ...options, height_mm: 0 }).mesh.triangles).toBe(0);

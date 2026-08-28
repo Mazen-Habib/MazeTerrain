@@ -83,12 +83,22 @@ export function buildFrame(ring: Ring, options: FrameOptions): FrameResult {
   // point where the boundary meets itself.
   const closed: Ring = ring[0] === ring[ring.length - 1] ? ring : [...ring, ring[0]];
 
-  // The level set of a closed loop at distance `width` is an annulus straddling
-  // it. Its OUTER contour is the boundary pushed out by the frame width — the
-  // frame's outer edge, exactly, with no offsetting code to get wrong. Pair it
-  // with the boundary itself as a hole and the band is the region between them.
-  const band = buildRibbonField([closed], width_m * 2, null, CELLS_PER_HALF_WIDTH);
-  const outer = largestContour(band.polygons);
+  // The outer edge is the boundary pushed out by the frame width, MITRED.
+  //
+  // A distance-field level set gives a true parallel offset, which rounds every
+  // convex corner by construction — a rectangular map came out with rounded
+  // outer corners against square inner ones, which is not what a picture frame
+  // looks like. Mitring carries the corner to a point instead. On a circle
+  // sampled at 180 points every turn is barely a degree, so the two agree.
+  //
+  // The level set is still the fallback: a miter self-intersects on a boundary
+  // that turns back on itself hard enough, and a rounded corner beats a
+  // tangled one.
+  let outer = mitreOutward(ring, width_m);
+  if (!outer) {
+    const band = buildRibbonField([closed], width_m * 2, null, CELLS_PER_HALF_WIDTH);
+    outer = largestContour(band.polygons);
+  }
   if (!outer) return { mesh: EMPTY, top_mm, footprint_mm: [] };
 
   const polygons: MultiPolygon = [[outer, ring]];
@@ -120,6 +130,116 @@ export function buildFrame(ring: Ring, options: FrameOptions): FrameResult {
   );
 
   return { mesh, top_mm, footprint_mm };
+}
+
+/**
+ * How far a mitred corner may run out before it is cut off, in frame widths.
+ *
+ * A corner sharper than about 30 degrees sends its miter point off towards
+ * infinity; past this it is bevelled instead, which is what every stroke
+ * renderer does and what a real mitre saw would do.
+ */
+const MITRE_LIMIT = 4;
+
+/** Twice the signed area. Positive means counter-clockwise. */
+function signedArea2(ring: Ring): number {
+  let total = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    total += a[0] * b[1] - b[0] * a[1];
+  }
+  return total;
+}
+
+/**
+ * Push a ring outward by `distance`, carrying corners to a point.
+ *
+ * @returns the offset ring, or null if it crosses itself and cannot be used
+ */
+function mitreOutward(ring: Ring, distance: number): Ring | null {
+  const n = ring.length;
+  if (n < 3 || !(distance > 0)) return null;
+
+  // Which side is "out" follows from the winding, not from a centroid test: a
+  // centroid is outside its own polygon often enough on a hand-drawn shape.
+  const sign = signedArea2(ring) > 0 ? 1 : -1;
+
+  /** Outward unit normal of the edge leaving vertex i. */
+  const edgeNormal = (i: number): [number, number] | null => {
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-12) return null;
+    return [(dy / len) * sign, (-dx / len) * sign];
+  };
+
+  const out: Ring = [];
+  for (let i = 0; i < n; i++) {
+    const before = edgeNormal((i - 1 + n) % n);
+    const after = edgeNormal(i);
+    if (!before || !after) continue;
+
+    let mx = before[0] + after[0];
+    let my = before[1] + after[1];
+    const len = Math.hypot(mx, my);
+    if (len < 1e-9) {
+      // A perfect reversal: there is no miter, only two opposed faces.
+      out.push([ring[i][0] + before[0] * distance, ring[i][1] + before[1] * distance]);
+      out.push([ring[i][0] + after[0] * distance, ring[i][1] + after[1] * distance]);
+      continue;
+    }
+    mx /= len;
+    my /= len;
+
+    // The miter runs along the bisector, far enough that both offset faces meet.
+    const cos = mx * before[0] + my * before[1];
+    const reach = distance / Math.max(cos, 1e-6);
+    if (reach > distance * MITRE_LIMIT) {
+      out.push([ring[i][0] + before[0] * distance, ring[i][1] + before[1] * distance]);
+      out.push([ring[i][0] + after[0] * distance, ring[i][1] + after[1] * distance]);
+    } else {
+      out.push([ring[i][0] + mx * reach, ring[i][1] + my * reach]);
+    }
+  }
+
+  if (out.length < 3 || selfIntersects(out)) return null;
+  return out;
+}
+
+/** Does any pair of non-adjacent edges cross? */
+function selfIntersects(ring: Ring): boolean {
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    const a1 = ring[i];
+    const a2 = ring[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      // Skip the pair that shares the closing vertex.
+      if (i === 0 && j === n - 1) continue;
+      if (segmentsCross(a1, a2, ring[j], ring[(j + 1) % n])) return true;
+    }
+  }
+  return false;
+}
+
+function segmentsCross(
+  p1: readonly [number, number],
+  p2: readonly [number, number],
+  p3: readonly [number, number],
+  p4: readonly [number, number],
+): boolean {
+  const d = (a: readonly [number, number], b: readonly [number, number], c: readonly [number, number]) =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+
+  const d1 = d(p3, p4, p1);
+  const d2 = d(p3, p4, p2);
+  const d3 = d(p1, p2, p3);
+  const d4 = d(p1, p2, p4);
+  // Strictly opposite sides on both tests: touching at an endpoint is not a
+  // crossing, and offset rings touch at endpoints all the time.
+  return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
 }
 
 /**
