@@ -441,6 +441,13 @@ body {
   color: var(--bad);
 }
 
+/* A cancelled build or a declined permission is an outcome, not a failure.
+   Painting it the same red as a dead server teaches people to ignore the red. */
+.alert--notice {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
 .alert--dirty {
   border-color: var(--warn);
   color: var(--warn);
@@ -888,4 +895,25 @@ body {
 .textInput--wide {
   display: block;
   width: 100%;
+}
+
+/* The 3D tab before anything is built. A blank void reads as a broken viewer;
+   it should say what to do next instead. */
+.stageempty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  padding: 24px;
+}
+
+.stageempty p {
+  max-width: 34ch;
+  margin: 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
 }

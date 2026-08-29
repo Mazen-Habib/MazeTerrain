@@ -21,6 +21,7 @@ import { writeThreeMF, threeMFFilename } from '../export/threemf';
 import { writePartBundle, bundleFilename } from '../export/bundle';
 import { bboxCentre, resolveGrid } from '../geometry/coords';
 import {
+  fitCircleToRoutes,
   fitSelectionToRoutes,
   selectionArea_km2,
   selectionBBox,
@@ -149,6 +150,9 @@ export function App() {
   const [autoSpin, setAutoSpin] = useState(false);
   const [cursor, setCursor] = useState<LonLat | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
+  const [locating, setLocating] = useState(false);
+  /** Where the map should fly to next, or null. Consumed by MapView. */
+  const [flyTo, setFlyTo] = useState<LonLat | null>(null);
 
   const [settings, setSettings] = useState<Settings>(() => {
     if (SHARED) return SHARED.settings;
@@ -160,7 +164,14 @@ export function App() {
 
   const [progress, setProgress] = useState<Progress | null>(null);
   const [bundle, setBundle] = useState<MeshBundle | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * What went wrong, and how loudly to say it.
+   *
+   * A cancelled build is not a failure — the user asked for it — and painting
+   * it in the same red as "the DEM server is down" teaches people to ignore the
+   * red box.
+   */
+  const [error, setError] = useState<{ level: 'fail' | 'notice'; text: string } | null>(null);
   const [dirty, setDirty] = useState(true);
 
   /**
@@ -232,8 +243,8 @@ export function App() {
 
   /** The primary first-run path: upload a GPX and the selection is already right. */
   const fitToRoutes = useCallback(
-    (list: Route[]) => {
-      const fitted = fitSelectionToRoutes(list);
+    (list: Route[], shape: 'rectangle' | 'circle' = 'rectangle') => {
+      const fitted = shape === 'circle' ? fitCircleToRoutes(list) : fitSelectionToRoutes(list);
       if (fitted) {
         applyShape(fitted, list.length === 1 ? list[0].name : `${list.length} routes`, true);
       }
@@ -277,6 +288,48 @@ export function App() {
     setError(null);
   }, []);
 
+  /**
+   * Centre the map near the user (docs/07-ui-spec.md, first-run flow).
+   *
+   * A button rather than something the app does on load. The spec asks for the
+   * map to open on the user's approximate location, but doing that
+   * automatically fires a browser permission prompt at someone who has not yet
+   * worked out what the app is — and a denied prompt is hard to undo. Asking
+   * for it costs one click and only ever happens because the user chose to.
+   *
+   * The selection is deliberately not moved: the map view and the thing being
+   * printed are separate, and silently relocating someone's selection would be
+   * a much ruder surprise than a map pan.
+   */
+  const goToMyLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setError({
+        level: 'notice',
+        text: 'This browser will not share a location. Pan the map to your area instead.',
+      });
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocating(false);
+        setError(null);
+        setFlyTo([position.coords.longitude, position.coords.latitude]);
+      },
+      (err) => {
+        setLocating(false);
+        setError({
+          level: 'notice',
+          text:
+            err.code === err.PERMISSION_DENIED
+              ? 'Location permission was declined, so the map stayed where it was. Pan to your area instead, or allow location from the browser address bar.'
+              : 'Could not work out where you are. Pan the map to your area instead.',
+        });
+      },
+      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 600_000 },
+    );
+  }, []);
+
   const onSmoothing = useCallback((id: string, value: number) => {
     setRoutes((current) =>
       current.map((r) => (r.id === id ? { ...r, smoothing: Math.max(0, Math.min(1, value)) } : r)),
@@ -313,12 +366,17 @@ export function App() {
         }
       }
 
-      if (failures.length > 0) setError(failures.join(' '));
+      if (failures.length > 0) setError({ level: 'fail', text: failures.join(' ') });
       if (parsed.length === 0) return;
 
       setRoutes((current) => {
         const next = [...current, ...parsed];
-        if (current.length === 0) fitToRoutes(next);
+        // First upload: fit the map and draw a selection without being asked,
+        // so the user sees a working model before touching a setting
+        // (docs/07-ui-spec.md, first-run flow). A circle, because that is the
+        // shape a route model is usually printed as; the explicit fit button
+        // still gives a rectangle.
+        if (current.length === 0) fitToRoutes(next, 'circle');
         return next;
       });
       setDirty(true);
@@ -359,7 +417,10 @@ export function App() {
 
   const onGenerate = useCallback(async () => {
     if (!shape) {
-      setError('Draw an area on the map first — there is nothing to generate.');
+      setError({
+      level: 'notice',
+      text: 'Draw an area on the map first — use the shape tools, or upload a GPX and the area is drawn for you.',
+    });
       return;
     }
     setError(null);
@@ -384,13 +445,21 @@ export function App() {
       setView('3d');
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        setError('Generation cancelled.');
+        setError({ level: 'notice', text: 'Generation cancelled. Nothing was changed.' });
       } else {
         const userMessage =
           err && typeof err === 'object' && 'userMessage' in err
             ? String((err as { userMessage: unknown }).userMessage)
             : null;
-        setError(userMessage ?? (err instanceof Error ? err.message : String(err)));
+        // A raw JS message ("Cannot read properties of undefined") tells the
+        // user nothing they can act on, so it is labelled as the bug it is.
+        setError({
+          level: 'fail',
+          text:
+            userMessage ??
+            `The build failed unexpectedly: ${err instanceof Error ? err.message : String(err)}. ` +
+              `That is a bug — please report it with the area and settings you used.`,
+        });
       }
     } finally {
       setProgress(null);
@@ -451,7 +520,7 @@ export function App() {
     cancelGeneration();
     terminateWorker();
     setProgress(null);
-    setError('Generation cancelled.');
+    setError({ level: 'notice', text: 'Generation cancelled. Nothing was changed.' });
   }, []);
 
   const blocked = bundle ? bundle.warnings.some((w) => w.level === 'fail') : true;
@@ -507,9 +576,13 @@ export function App() {
       setDirty(true);
       if (project.shape) setFitNonce((n) => n + 1);
     } catch (err) {
-      setError(
-        err instanceof ProjectError ? err.userMessage : `Could not open that project: ${String(err)}`,
-      );
+      setError({
+        level: 'fail',
+        text:
+          err instanceof ProjectError
+            ? err.userMessage
+            : `Could not open that project: ${String(err)}`,
+      });
     }
   }, []);
 
@@ -604,7 +677,6 @@ export function App() {
             aria-selected={view === '3d'}
             className={view === '3d' ? 'viewtoggle__on' : ''}
             onClick={() => setView('3d')}
-            disabled={!bundle}
           >
             3D Model
           </button>
@@ -1223,7 +1295,7 @@ export function App() {
           {bundle ? <Results bundle={bundle} dirty={dirty} /> : null}
           {error ? (
             <section>
-              <div className="alert alert--fail">{error}</div>
+              <div className={`alert alert--${error.level}`}>{error.text}</div>
             </section>
           ) : null}
         </aside>
@@ -1241,6 +1313,7 @@ export function App() {
               featurePreview={preview?.geojson ?? null}
               onShapeChange={(next) => applyShape(next, 'Custom selection')}
               onRouteDrawn={onRouteDrawn}
+              flyTo={flyTo}
               onToolFinished={() => setTool(null)}
               onCursor={setCursor}
             />
@@ -1259,6 +1332,14 @@ export function App() {
               ))}
               <button className="shapetool" onClick={() => fitToRoutes(routes)} disabled={routes.length === 0}>
                 <span aria-hidden>⤢</span> Fit to routes
+              </button>
+              <button
+                className="shapetool"
+                onClick={goToMyLocation}
+                disabled={locating}
+                title="Centre the map near you"
+              >
+                <span aria-hidden>◎</span> {locating ? 'Locating…' : 'My location'}
               </button>
               <button
                 className="shapetool shapetool--danger"
@@ -1290,6 +1371,17 @@ export function App() {
 
           <div className={view === '3d' ? 'stage' : 'stage stage--hidden'}>
             <Viewer bundle={bundle} shading={shading} autoSpin={autoSpin} />
+            {bundle ? null : (
+              <div className="stageempty">
+                <p>
+                  {busy
+                    ? 'Building the model…'
+                    : shape
+                      ? 'Nothing built yet. Press Generate and the model appears here.'
+                      : 'Nothing built yet. Draw an area on the Map tab first, or upload a GPX and the area is drawn for you.'}
+                </p>
+              </div>
+            )}
             <div className="shadingtools" role="group" aria-label="Shading mode">
               {SHADING.map((s) => (
                 <button

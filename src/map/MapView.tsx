@@ -41,6 +41,8 @@ interface MapViewProps {
   onShapeChange: (shape: SelectionShape) => void;
   /** A hand-drawn route, finished (docs/02-feature-spec.md F1.3). */
   onRouteDrawn: (points: LonLat[]) => void;
+  /** Somewhere to fly the view, or null. Set by "My location". */
+  flyTo: LonLat | null;
   onToolFinished: () => void;
   onCursor: (lonLat: LonLat) => void;
 }
@@ -70,6 +72,7 @@ export function MapView({
   featurePreview,
   onShapeChange,
   onRouteDrawn,
+  flyTo,
   onToolFinished,
   onCursor,
 }: MapViewProps) {
@@ -481,6 +484,14 @@ export function MapView({
     // Only when the nonce changes; shape edits from dragging must not re-frame.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitNonce]);
+
+  // "My location" moves the VIEW only. The selection is a separate thing and
+  // silently relocating it would be a far ruder surprise than a map pan.
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !flyTo) return;
+    m.flyTo({ center: flyTo, zoom: Math.max(m.getZoom(), 11), duration: 1200 });
+  }, [flyTo]);
 
   return <div className="mapview" ref={container} />;
 }

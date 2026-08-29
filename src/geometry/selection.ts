@@ -99,10 +99,38 @@ export function bboxRingWorld(bbox: BBox, origin: EnuOrigin): Ring {
 export const FIT_PADDING = 0.15;
 
 /**
+ * A circle enclosing the routes (docs/07-ui-spec.md, first-run flow).
+ *
+ * Used for the selection drawn AUTOMATICALLY on a first upload, where the point
+ * is that the user sees something already working before touching a setting —
+ * and a disc is the shape a route model is usually printed as. The explicit
+ * "Fit selection to routes" button still gives a rectangle, which wastes less
+ * area on a route that runs mostly one way; the difference is that pressing it
+ * is a deliberate act and this is not.
+ */
+export function fitCircleToRoutes(routes: Route[], padding = FIT_PADDING): SelectionShape | null {
+  const boxes = routes.filter((r) => r.style.visible).map((r) => r.bbox);
+  const union = unionBBox(boxes);
+  if (!union) return null;
+
+  const lon = (union.west + union.east) / 2;
+  const lat = (union.south + union.north) / 2;
+  const midLat = (lat * Math.PI) / 180;
+
+  // Half-diagonal, so the whole bounding box fits inside the circle.
+  const halfWidth_m = ((union.east - union.west) / 2) * 111320 * Math.cos(midLat);
+  const halfHeight_m = ((union.north - union.south) / 2) * 110574;
+  const radius_m = Math.hypot(halfWidth_m, halfHeight_m) * (1 + padding);
+
+  // A route that never moved still needs an area around it.
+  return { kind: 'circle', lon, lat, radius_m: Math.max(radius_m, 250) };
+}
+
+/**
  * Size a rectangle around every visible route.
  *
- * This is the primary first-run path: the user uploads a GPX and the selection
- * should already be right before they touch a single control
+ * What "Fit selection to routes" gives, and the tighter of the two: a route
+ * that runs mostly one way wastes far less area in a box than in a disc
  * (docs/08-pitfalls.md#route-outside-selection).
  */
 export function fitSelectionToRoutes(

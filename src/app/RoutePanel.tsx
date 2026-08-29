@@ -113,7 +113,8 @@ export function RoutePanel({
 
       {routes.length === 0 ? (
         <p className="note">
-          No routes yet. Phase 0&apos;s terrain-only presets still work without one.
+          No route yet. Upload a GPX or draw one and the map will frame it for you — or
+          skip routes entirely and just print an area, using the shape tools on the map.
         </p>
       ) : (
         <>
