@@ -19,6 +19,7 @@ import { defaultRouteStyle, ROUTE_PALETTE, type Route } from '../data/gpx/types'
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
 import { writeThreeMF, threeMFFilename } from '../export/threemf';
 import { writePartBundle, bundleFilename } from '../export/bundle';
+import { layOutForPrint } from '../export/layout';
 import { bboxCentre, resolveGrid } from '../geometry/coords';
 import {
   fitCircleToRoutes,
@@ -436,6 +437,12 @@ export function App() {
         (p) => setProgress(p),
       );
       setBundle(result);
+      // Dev-only handle on the built mesh. Stripped from production by the
+      // bundler, and the only way to interrogate real geometry from the page
+      // when a fault is visible on screen but has no numeric signature yet.
+      if (import.meta.env.DEV) {
+        (window as unknown as { __mesh?: MeshBundle }).__mesh = result;
+      }
       if (import.meta.env.DEV) {
         // Same dev-only escape hatch as the map handle: lets the mesh be
         // inspected from the console without a separate build path.
@@ -612,7 +619,11 @@ export function App() {
   const onDownload = useCallback(() => {
     if (!bundle || blocked) return;
     save(
-      writeBinarySTL(bundle.parts, stlHeader()),
+      // Laid out, not assembled. An insert sits INSIDE the body's channel,
+      // which is right on screen and wrong in a file going to a slicer: nested
+      // solids give internal perimeters along the whole route, and an insert
+      // buried in a cavity cannot be printed at all.
+      writeBinarySTL(layOutForPrint(bundle.parts), stlHeader()),
       stlFilename(builtSlug.current, config.modelWidth_mm),
       'model/stl',
     );
@@ -648,7 +659,9 @@ export function App() {
   const onDownload3mf = useCallback(() => {
     if (!bundle || blocked) return;
     save(
-      writeThreeMF(bundle.parts),
+      // Same reason as the STL: a 3MF's objects land on the plate where they
+      // are put, so a nested insert is just as unprintable there.
+      writeThreeMF(layOutForPrint(bundle.parts)),
       threeMFFilename(builtSlug.current, config.modelWidth_mm),
       'model/3mf',
     );
