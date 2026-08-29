@@ -208,6 +208,8 @@ export function parseGpxDocument(doc: Document, filename: string): Route[] {
       id: `route-${++routeCounter}`,
       name,
       points,
+      source: 'gpx' as const,
+      smoothing: 0,
       distance_m: routeDistance(points),
       elevationGain_m: elevationGain(points),
       bbox: boundsOfPoints(points),

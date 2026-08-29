@@ -14,6 +14,7 @@ import { selectionBBox, type SelectionShape } from '../geometry/selection';
 import { BASEMAPS, demSource } from './basemaps';
 import {
   finishPolygon,
+  isClickTool,
   moveShape,
   pointsToGeoJSON,
   resizeShape,
@@ -38,14 +39,23 @@ interface MapViewProps {
   /** OSM features the model will contain, or null when no preview is loaded. */
   featurePreview: GeoJSON.FeatureCollection | null;
   onShapeChange: (shape: SelectionShape) => void;
+  /** A hand-drawn route, finished (docs/02-feature-spec.md F1.3). */
+  onRouteDrawn: (points: LonLat[]) => void;
   onToolFinished: () => void;
   onCursor: (lonLat: LonLat) => void;
+}
+
+/** Within a few pixels on screen, at the current zoom. */
+function samePlace(m: maplibregl.Map, a: LonLat, b: LonLat): boolean {
+  const pa = m.project(a);
+  const pb = m.project(b);
+  return Math.hypot(pa.x - pb.x, pa.y - pb.y) < 4;
 }
 
 type Interaction =
   | { kind: 'idle' }
   | { kind: 'drawing'; start: LonLat }
-  | { kind: 'polygon'; points: LonLat[] }
+  | { kind: 'points'; points: LonLat[] }
   | { kind: 'moving'; last: LonLat }
   | { kind: 'resizing' };
 
@@ -59,6 +69,7 @@ export function MapView({
   routes,
   featurePreview,
   onShapeChange,
+  onRouteDrawn,
   onToolFinished,
   onCursor,
 }: MapViewProps) {
@@ -69,8 +80,8 @@ export function MapView({
   // Interaction and the newest props, read from map event handlers that are
   // registered once and must not close over stale values.
   const interaction = useRef<Interaction>({ kind: 'idle' });
-  const live = useRef({ shape, tool, onShapeChange, onToolFinished, onCursor });
-  live.current = { shape, tool, onShapeChange, onToolFinished, onCursor };
+  const live = useRef({ shape, tool, onShapeChange, onRouteDrawn, onToolFinished, onCursor });
+  live.current = { shape, tool, onShapeChange, onRouteDrawn, onToolFinished, onCursor };
 
   const setData = useCallback((id: string, data: GeoJSON.GeoJSON) => {
     const source = map.current?.getSource(id) as maplibregl.GeoJSONSource | undefined;
@@ -236,7 +247,7 @@ export function MapView({
       if (state.kind === 'drawing' && activeTool) {
         const preview = shapeFromDrag(activeTool, state.start, toLonLat(e));
         if (preview) setData('selection', shapeToGeoJSON(preview));
-      } else if (state.kind === 'polygon') {
+      } else if (state.kind === 'points') {
         setData('draft', pointsToGeoJSON([...state.points, toLonLat(e)]));
       } else if (state.kind === 'moving' && current) {
         const [lon, lat] = toLonLat(e);
@@ -251,7 +262,7 @@ export function MapView({
     m.on('mousedown', (e: MapMouseEvent) => {
       const { tool: activeTool, shape: current } = live.current;
 
-      if (activeTool && activeTool !== 'polygon') {
+      if (activeTool && !isClickTool(activeTool)) {
         interaction.current = { kind: 'drawing', start: toLonLat(e) };
         m.dragPan.disable();
         return;
@@ -282,36 +293,90 @@ export function MapView({
         }
       }
 
-      if (state.kind !== 'polygon') {
+      if (state.kind !== 'points') {
         interaction.current = { kind: 'idle' };
         m.dragPan.enable();
       }
     });
 
-    // Polygon is click-to-add rather than drag.
+    // Polygon and route are click-to-add rather than drag.
     m.on('click', (e: MapMouseEvent) => {
-      if (live.current.tool !== 'polygon') return;
+      if (!isClickTool(live.current.tool)) return;
       const state = interaction.current;
-      const points = state.kind === 'polygon' ? [...state.points, toLonLat(e)] : [toLonLat(e)];
-      interaction.current = { kind: 'polygon', points };
+      const here = toLonLat(e);
+      const existing = state.kind === 'points' ? state.points : [];
+
+      // A double-click fires TWO clicks before dblclick, so finishing a line
+      // otherwise left a duplicate vertex on the end. Dropping a click that
+      // lands on the previous point costs nothing — nobody places two vertices
+      // in the same spot on purpose — and it makes the point count match the
+      // number of places actually clicked.
+      const last = existing[existing.length - 1];
+      if (last && samePlace(m, last, here)) return;
+
+      const points = [...existing, here];
+      interaction.current = { kind: 'points', points };
       setData('draft', pointsToGeoJSON(points));
     });
 
     m.on('dblclick', (e: MapMouseEvent) => {
       const state = interaction.current;
-      if (live.current.tool !== 'polygon' || state.kind !== 'polygon') return;
+      const activeTool = live.current.tool;
+      if (!isClickTool(activeTool) || state.kind !== 'points') return;
       e.preventDefault();
 
-      const next = finishPolygon(state.points);
+      // The double-click fires after the click that placed the last vertex, so
+      // the point under the cursor is already in the list.
+      const points = state.points;
       interaction.current = { kind: 'idle' };
       setData('draft', EMPTY);
+
+      if (activeTool === 'route') {
+        // Two points is a line; a route does not need to enclose anything.
+        if (points.length >= 2) {
+          live.current.onRouteDrawn(points);
+          live.current.onToolFinished();
+        }
+        return;
+      }
+
+      const next = finishPolygon(points);
       if (next) {
         live.current.onShapeChange(next);
         live.current.onToolFinished();
       }
     });
 
+    /**
+     * Backspace takes back the last vertex, Escape abandons the line.
+     *
+     * A click tool has no other way out: with no undo, one misplaced vertex
+     * means starting the whole route again.
+     */
+    const onKey = (event: KeyboardEvent) => {
+      const state = interaction.current;
+      if (!isClickTool(live.current.tool) || state.kind !== 'points') return;
+
+      if (event.key === 'Escape') {
+        interaction.current = { kind: 'idle' };
+        setData('draft', EMPTY);
+        live.current.onToolFinished();
+      } else if (event.key === 'Backspace') {
+        event.preventDefault();
+        const points = state.points.slice(0, -1);
+        interaction.current = points.length > 0 ? { kind: 'points', points } : { kind: 'idle' };
+        setData('draft', pointsToGeoJSON(points));
+      } else if (event.key === 'Enter' && live.current.tool === 'route' && state.points.length >= 2) {
+        interaction.current = { kind: 'idle' };
+        setData('draft', EMPTY);
+        live.current.onRouteDrawn(state.points);
+        live.current.onToolFinished();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+
     return () => {
+      window.removeEventListener('keydown', onKey);
       m.remove();
       map.current = null;
       ready.current = false;

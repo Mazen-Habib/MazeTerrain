@@ -14,8 +14,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEM_DATASETS } from '../data/dem/datasets';
 import { BED_PRESETS, defaultConfig, PRESETS } from '../config/presets';
-import { GpxParseError, parseGpxText } from '../data/gpx/parse';
-import type { Route } from '../data/gpx/types';
+import { GpxParseError, parseGpxText, routeDistance } from '../data/gpx/parse';
+import { defaultRouteStyle, ROUTE_PALETTE, type Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
 import { writeThreeMF, threeMFFilename } from '../export/threemf';
 import { writePartBundle, bundleFilename } from '../export/bundle';
@@ -103,6 +103,7 @@ function toSerialisable(routes: Route[]): SerialisableRoute[] {
     id: r.id,
     name: r.name,
     points: r.points,
+    smoothing: r.smoothing,
     style: { ...r.style },
   }));
 }
@@ -239,6 +240,63 @@ export function App() {
     },
     [applyShape],
   );
+
+  /**
+   * A hand-drawn route becomes a Route and enters the same pipeline as a
+   * recorded one (docs/02-feature-spec.md F1.3).
+   *
+   * It carries `smoothing` because a clicked polyline is all hard corners,
+   * where a recorded track never is. Everything else about it — styling,
+   * elevation, the geometry it builds — is identical.
+   */
+  const onRouteDrawn = useCallback((points: LonLat[]) => {
+    if (points.length < 2) return;
+
+    setRoutes((current) => {
+      const drawn = current.filter((r) => r.source === 'drawn').length + 1;
+      const route: Route = {
+        id: `drawn-${Date.now()}`,
+        name: `Drawn route ${drawn}`,
+        source: 'drawn',
+        smoothing: 0.5,
+        points: points.map(([lon, lat]) => ({ lon, lat })),
+        distance_m: routeDistance(points.map(([lon, lat]) => ({ lon, lat }))),
+        // No recorded elevation to gain: a drawn route drapes on the DEM.
+        elevationGain_m: null,
+        bbox: {
+          west: Math.min(...points.map((p) => p[0])),
+          east: Math.max(...points.map((p) => p[0])),
+          south: Math.min(...points.map((p) => p[1])),
+          north: Math.max(...points.map((p) => p[1])),
+        },
+        style: defaultRouteStyle(ROUTE_PALETTE[current.length % ROUTE_PALETTE.length]),
+      };
+      return [...current, route];
+    });
+    setDirty(true);
+    setError(null);
+  }, []);
+
+  const onSmoothing = useCallback((id: string, value: number) => {
+    setRoutes((current) =>
+      current.map((r) => (r.id === id ? { ...r, smoothing: Math.max(0, Math.min(1, value)) } : r)),
+    );
+    setDirty(true);
+  }, []);
+
+  /**
+   * Flip the direction of travel.
+   *
+   * Visible in the model wherever the route is not symmetric — a tapered end,
+   * or an insert that has to go in the right way round — and the only way to
+   * fix a line drawn backwards short of drawing it again.
+   */
+  const onReverse = useCallback((id: string) => {
+    setRoutes((current) =>
+      current.map((r) => (r.id === id ? { ...r, points: [...r.points].reverse() } : r)),
+    );
+    setDirty(true);
+  }, []);
 
   const onUpload = useCallback(
     async (files: FileList | null) => {
@@ -595,6 +653,10 @@ export function App() {
             onInsertProudChange={(v) => update({ cutout: { ...config.cutout, insertProud_mm: v } })}
             routes={routes}
             busy={busy}
+            drawing={tool === 'route'}
+            onDraw={() => setTool(tool === 'route' ? null : 'route')}
+            onSmoothing={onSmoothing}
+            onReverse={onReverse}
             onUpload={onUpload}
             onUpdate={updateRoute}
             onRemove={removeRoute}
@@ -1178,6 +1240,7 @@ export function App() {
               routes={routes}
               featurePreview={preview?.geojson ?? null}
               onShapeChange={(next) => applyShape(next, 'Custom selection')}
+              onRouteDrawn={onRouteDrawn}
               onToolFinished={() => setTool(null)}
               onCursor={setCursor}
             />
@@ -1209,9 +1272,11 @@ export function App() {
 
             {tool ? (
               <div className="drawhint">
-                {tool === 'polygon'
-                  ? 'Click to add points, double-click to finish. Esc cancels.'
-                  : 'Drag on the map to draw. Esc cancels.'}
+                {tool === 'route'
+                  ? 'Drawing a route: click to place points, Backspace undoes, double-click or Enter finishes. Esc cancels.'
+                  : tool === 'polygon'
+                    ? 'Click to add points, double-click to finish. Backspace undoes, Esc cancels.'
+                    : 'Drag on the map to draw. Esc cancels.'}
               </div>
             ) : null}
 

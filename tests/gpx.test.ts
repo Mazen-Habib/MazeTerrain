@@ -9,6 +9,7 @@ import {
   routeDistance,
   unionBBox,
 } from '../src/data/gpx/parse';
+import { smoothPolyline, type Pt } from '../src/data/gpx/simplify';
 
 const TRACK = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Garmin Connect" xmlns="http://www.topografix.com/GPX/1/1">
@@ -181,5 +182,83 @@ describe('elevationGain / boundsOfPoints', () => {
   it('bounds a single point to a degenerate box', () => {
     const b = boundsOfPoints([{ lon: 5, lat: 6 }]);
     expect(b).toEqual({ west: 5, south: 6, east: 5, north: 6 });
+  });
+});
+
+/**
+ * Hand-drawn routes (docs/02-feature-spec.md F1.3).
+ *
+ * A clicked polyline is all hard corners where a recorded track never is, so a
+ * drawn route carries a smoothing amount and a recorded one carries zero.
+ */
+describe('smoothPolyline', () => {
+  /** A right-angle corner: the shape Chaikin exists to round off. */
+  const corner: Pt[] = [
+    [0, 0],
+    [10, 0],
+    [10, 10],
+  ];
+
+  it('leaves the line exactly as drawn at zero', () => {
+    expect(smoothPolyline(corner, 0)).toEqual(corner);
+  });
+
+  it('pins the endpoints, so the route still starts and ends where it was drawn', () => {
+    const smoothed = smoothPolyline(corner, 1);
+    expect(smoothed[0]).toEqual(corner[0]);
+    expect(smoothed[smoothed.length - 1]).toEqual(corner[corner.length - 1]);
+  });
+
+  it('cuts the corner rather than passing through it', () => {
+    const smoothed = smoothPolyline(corner, 1);
+    // Nothing lands on the sharp vertex any more.
+    const onCorner = smoothed.filter(([x, y]) => Math.hypot(x - 10, y) < 0.5);
+    expect(onCorner).toHaveLength(0);
+
+    // And the rounded path is shorter than the two legs it replaced.
+    const length = (pts: Pt[]) =>
+      pts.slice(1).reduce((sum, p, i) => sum + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0);
+    expect(length(smoothed)).toBeLessThan(length(corner));
+  });
+
+  it('rounds further the more it is asked for', () => {
+    // "Rounder" is a gentler turn, not points further from the corner: Chaikin
+    // converges on a spline, so more passes put MORE points near the corner
+    // while the angle between consecutive segments keeps shrinking.
+    const sharpestTurn = (pts: Pt[]) => {
+      let worst = 0;
+      for (let i = 1; i + 1 < pts.length; i++) {
+        const a = Math.atan2(pts[i][1] - pts[i - 1][1], pts[i][0] - pts[i - 1][0]);
+        const b = Math.atan2(pts[i + 1][1] - pts[i][1], pts[i + 1][0] - pts[i][0]);
+        let turn = Math.abs(b - a);
+        if (turn > Math.PI) turn = 2 * Math.PI - turn;
+        worst = Math.max(worst, turn);
+      }
+      return worst;
+    };
+
+    expect(sharpestTurn(corner)).toBeCloseTo(Math.PI / 2, 6);
+    expect(sharpestTurn(smoothPolyline(corner, 0.25))).toBeLessThan(sharpestTurn(corner));
+    expect(sharpestTurn(smoothPolyline(corner, 1))).toBeLessThan(
+      sharpestTurn(smoothPolyline(corner, 0.25)),
+    );
+  });
+
+  it('stays inside the corner it is rounding', () => {
+    // Chaikin is a convex-hull operation: nothing may escape the original line.
+    for (const [x, y] of smoothPolyline(corner, 1)) {
+      expect(x).toBeGreaterThanOrEqual(-1e-9);
+      expect(x).toBeLessThanOrEqual(10 + 1e-9);
+      expect(y).toBeGreaterThanOrEqual(-1e-9);
+      expect(y).toBeLessThanOrEqual(10 + 1e-9);
+    }
+  });
+
+  it('has nothing to do with two points, which have no corner', () => {
+    const line: Pt[] = [
+      [0, 0],
+      [1, 1],
+    ];
+    expect(smoothPolyline(line, 1)).toEqual(line);
   });
 });

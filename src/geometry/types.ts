@@ -249,6 +249,8 @@ export interface SerialisableRoute {
   id: string;
   name: string;
   points: Array<{ lon: number; lat: number; ele?: number; t?: number }>;
+  /** Chaikin rounding before the line is built, 0-1. Drawn routes only. */
+  smoothing?: number;
   style: {
     color: string;
     width_mm: number;

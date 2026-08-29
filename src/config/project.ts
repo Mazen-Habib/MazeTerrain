@@ -261,6 +261,8 @@ function restoreRoutes(raw: unknown): Route[] {
       id: str(item.id, `route-${out.length}`),
       name: str(item.name, 'Route'),
       points,
+      source: item.source === 'drawn' ? 'drawn' : 'gpx',
+      smoothing: Math.max(0, Math.min(1, num(item.smoothing, 0))),
       distance_m: num(item.distance_m, 0),
       elevationGain_m: typeof item.elevationGain_m === 'number' ? item.elevationGain_m : null,
       bbox: has

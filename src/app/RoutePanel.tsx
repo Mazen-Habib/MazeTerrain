@@ -27,6 +27,13 @@ interface RoutePanelProps {
   insertProud_mm: number;
   onInsertProudChange: (value: number) => void;
   onUpload: (files: FileList | null) => void;
+  /** Whether the map is currently in route-drawing mode. */
+  drawing: boolean;
+  onDraw: () => void;
+  /** Chaikin rounding for a drawn route, 0-1. */
+  onSmoothing: (id: string, value: number) => void;
+  /** Flip the direction of travel. */
+  onReverse: (id: string) => void;
   onUpdate: (id: string, patch: Partial<Route['style']>) => void;
   onRemove: (id: string) => void;
   onFit: () => void;
@@ -40,6 +47,10 @@ export function RoutePanel({
   insertProud_mm,
   onInsertProudChange,
   onUpload,
+  drawing,
+  onDraw,
+  onSmoothing,
+  onReverse,
   onUpdate,
   onRemove,
   onFit,
@@ -85,6 +96,20 @@ export function RoutePanel({
           }}
         />
       </div>
+
+      <button
+        type="button"
+        className={drawing ? 'btn btn--wide btn--accent' : 'btn btn--wide'}
+        disabled={busy}
+        onClick={onDraw}
+      >
+        {drawing ? 'Drawing — double-click to finish' : 'Draw a route on the map'}
+      </button>
+      <p className="field__hint">
+        {drawing
+          ? 'Click to place points. Backspace takes the last one back, Enter or a double-click finishes, Escape cancels.'
+          : 'For a route with no GPX — one you remember, or a course off a printed map. It builds exactly like a recorded one.'}
+      </p>
 
       {routes.length === 0 ? (
         <p className="note">
@@ -219,6 +244,28 @@ export function RoutePanel({
                   onChange={(v) => onUpdate(selected.id, { height_mm: v })}
                 />
               )}
+
+              {selected.source === 'drawn' ? (
+                <NumberField
+                  label="Corner rounding"
+                  value={selected.smoothing}
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  disabled={busy}
+                  onChange={(v) => onSmoothing(selected.id, v)}
+                  hint="Rounds the corners of a clicked line. Zero builds it exactly as drawn. Not the terrain smoothing under Topography."
+                />
+              ) : null}
+
+              <button
+                type="button"
+                className="btn btn--wide"
+                disabled={busy}
+                onClick={() => onReverse(selected.id)}
+              >
+                Reverse direction
+              </button>
 
               <div className="field">
                 <label className="field__label" htmlFor="route-elev">

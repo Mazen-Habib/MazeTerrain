@@ -15,7 +15,18 @@ import { enuOrigin, projectENU, unprojectENU } from '../geometry/coords';
 import type { SelectionShape } from '../geometry/selection';
 import type { BBox } from '../geometry/types';
 
-export type DrawTool = 'rectangle' | 'square' | 'circle' | 'hexagon' | 'polygon';
+/**
+ * `route` is not a selection shape — it draws a LINE, and finishes into a Route
+ * rather than a SelectionShape (docs/02-feature-spec.md F1.3). It rides the same
+ * click-to-add-vertex machinery as `polygon` because the interaction is
+ * identical; only what comes out of it differs.
+ */
+export type DrawTool = 'rectangle' | 'square' | 'circle' | 'hexagon' | 'polygon' | 'route';
+
+/** Tools that place vertices one click at a time rather than by dragging. */
+export function isClickTool(tool: DrawTool | null): boolean {
+  return tool === 'polygon' || tool === 'route';
+}
 
 export type LonLat = [number, number];
 

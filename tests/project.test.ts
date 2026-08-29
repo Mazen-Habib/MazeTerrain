@@ -59,6 +59,8 @@ function route(): Route {
       { lon: 7.66, lat: 45.97 },
       { lon: 7.67, lat: 45.98, t: 1700000000000 },
     ],
+    source: 'gpx',
+    smoothing: 0,
     distance_m: 4200,
     elevationGain_m: 310,
     bbox,
@@ -195,6 +197,32 @@ describe('reading a project that is wrong', () => {
     );
     expect(back.routes).toHaveLength(1);
     expect(back.routes[0].name).toBe('Matterhorn loop');
+  });
+
+  it('keeps a drawn route drawn, with its smoothing', () => {
+    const drawn = { ...route(), source: 'drawn' as const, smoothing: 0.7 };
+    const back = parseProject(
+      serialiseProject({ areaLabel: 'x', shape, settings: settings(), routes: [drawn] }),
+    );
+    expect(back.routes[0].source).toBe('drawn');
+    expect(back.routes[0].smoothing).toBe(0.7);
+  });
+
+  it('treats a route with no source as recorded, and clamps a silly smoothing', () => {
+    const back = parseProject(
+      JSON.stringify({
+        app: 'mazeterrain',
+        format: 1,
+        routes: [
+          { ...route(), source: undefined, smoothing: 9 },
+          { ...route(), id: 'r2', source: 'sketched', smoothing: -3 },
+        ],
+      }),
+    );
+    expect(back.routes[0].source).toBe('gpx');
+    expect(back.routes[0].smoothing).toBe(1);
+    expect(back.routes[1].source).toBe('gpx');
+    expect(back.routes[1].smoothing).toBe(0);
   });
 
   it('works out a missing route bbox from the points', () => {

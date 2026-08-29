@@ -1241,6 +1241,8 @@ function toRoute(record: GenerateRequest['routes'][number]): Route {
     id: record.id,
     name: record.name,
     points: record.points,
+    source: 'gpx',
+    smoothing: record.smoothing ?? 0,
     distance_m: 0,
     elevationGain_m: null,
     bbox: { west: 0, south: 0, east: 0, north: 0 },

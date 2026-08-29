@@ -19,6 +19,9 @@ export interface RoutePoint {
 /** Where a route's Z comes from (F1.4). Default `dem` — see OPEN-QUESTIONS R2. */
 export type ElevationSource = 'dem' | 'gpx' | 'flat';
 
+/** Recorded, or drawn on the map (F1.3). */
+export type RouteSource = 'gpx' | 'drawn';
+
 /** How the route meets the terrain (F1.2). Phase 1 ships `raised` only. */
 export type RouteProfile = 'raised' | 'engraved' | 'separate';
 
@@ -42,6 +45,24 @@ export interface Route {
   id: string;
   /** From `<name>`, else the filename. */
   name: string;
+  /**
+   * Where the line came from (docs/02-feature-spec.md F1.3).
+   *
+   * A drawn route is for someone with no GPX — a route they remember, a planned
+   * one, a race course off a PDF. It enters exactly the same pipeline as a
+   * recorded one; the only thing that differs is that a hand-drawn line is
+   * angular where a recorded one is noisy, so it gets `smoothing` and a
+   * recorded one does not need it.
+   */
+  source: RouteSource;
+  /**
+   * Chaikin rounding applied before the line is built, 0-1.
+   *
+   * Zero leaves the polyline exactly as drawn. Meaningful for a drawn route,
+   * where clicked corners are hard; a recorded track is already smooth enough
+   * and carries 0.
+   */
+  smoothing: number;
   points: RoutePoint[];
   /** Great-circle length of the raw track, metres. */
   distance_m: number;

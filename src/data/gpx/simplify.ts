@@ -167,3 +167,38 @@ export function pointToSegment(p: Pt, a: Pt, b: Pt): number {
 export function timesOf(points: RoutePoint[]): Array<number | undefined> {
   return points.map((p) => p.t);
 }
+
+/**
+ * Chaikin corner cutting, for a hand-drawn line (F1.3).
+ *
+ * A clicked polyline is all hard corners; a recorded track never is. Each pass
+ * replaces every corner with two points a quarter and three quarters along its
+ * edges, which converges on a quadratic B-spline. Endpoints are pinned, so the
+ * line still starts and ends where it was drawn.
+ *
+ * `amount` is the 0-1 control the UI exposes, mapped to a number of passes.
+ * Passes rather than a continuous parameter because Chaikin has no continuous
+ * one — and past about four the line stops visibly changing while the point
+ * count keeps doubling.
+ */
+export function smoothPolyline(points: Pt[], amount: number): Pt[] {
+  const passes = Math.round(Math.max(0, Math.min(1, amount)) * MAX_SMOOTHING_PASSES);
+  if (passes === 0 || points.length < 3) return points;
+
+  let current = points;
+  for (let pass = 0; pass < passes; pass++) {
+    const next: Pt[] = [current[0]];
+    for (let i = 0; i + 1 < current.length; i++) {
+      const [ax, ay] = current[i];
+      const [bx, by] = current[i + 1];
+      next.push([ax + (bx - ax) * 0.25, ay + (by - ay) * 0.25]);
+      next.push([ax + (bx - ax) * 0.75, ay + (by - ay) * 0.75]);
+    }
+    next.push(current[current.length - 1]);
+    current = next;
+  }
+  return current;
+}
+
+/** Passes at amount = 1. Past this the line stops changing and only grows. */
+const MAX_SMOOTHING_PASSES = 4;

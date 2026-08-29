@@ -9,6 +9,7 @@ import {
   denoise,
   resample,
   simplifyPoints,
+  smoothPolyline,
   toleranceForScale,
   type Pt,
 } from '../data/gpx/simplify';
@@ -166,11 +167,26 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
   // 1. Project to the local ENU frame the whole build shares.
   const projected: Pt[] = route.points.map((p) => projectENU(p.lon, p.lat, scale.origin));
 
+  // 1b. Round the corners of a hand-drawn line (F1.3).
+  //
+  // Before denoising, not after: denoise looks for implausible jumps between
+  // recorded points, and there is nothing implausible about a clicked corner.
+  // Smoothing first also means the simplifier downstream sees the curve the
+  // user actually asked for rather than the polygon they clicked.
+  const drawn = smoothPolyline(projected, route.smoothing);
+
   // 2. Denoise before anything else, or the simplifier preserves the spikes.
-  const cleaned = denoise(
-    projected,
-    route.points.map((p) => p.t),
-  );
+  //
+  // Timestamps drive the speed-spike filter, and Chaikin changes the point
+  // count, so they only line up when nothing was smoothed. A drawn route has
+  // no timestamps to lose.
+  const cleaned =
+    drawn.length === projected.length
+      ? denoise(
+          drawn,
+          route.points.map((p) => p.t),
+        )
+      : denoise(drawn);
 
   // 3. Simplify against a print-space budget, never a fixed metre value.
   const simplified = simplifyPoints(cleaned.points, toleranceForScale(scale.scale));

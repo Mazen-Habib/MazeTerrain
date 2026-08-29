@@ -29,6 +29,8 @@ function routeFromPoints(points: Pt[], width_mm: number): Route {
   return {
     id: 'r',
     name: 'test route',
+    source: 'gpx',
+    smoothing: 0,
     distance_m: 4000,
     elevationGain_m: null,
     points: points.map((p) => {
