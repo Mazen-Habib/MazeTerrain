@@ -6,7 +6,14 @@
  * that path rather than repeating it.
  */
 import { describe, expect, it } from 'vitest';
-import { contourLevels, suggestInterval, traceContours } from '../src/geometry/contours';
+import {
+  contourLevels,
+  suggestInterval,
+  suggestTerraceInterval,
+  terraceHeightfield,
+  traceContours,
+} from '../src/geometry/contours';
+import { sampleHeightfieldAt } from '../src/geometry/heightfield';
 import { makeHeightfield } from './helpers';
 
 describe('contourLevels', () => {
@@ -148,6 +155,173 @@ describe('suggestInterval', () => {
       const interval = suggestInterval(ramp(gradient), 100, 0.005, 0.7);
       const magnitude = 10 ** Math.floor(Math.log10(interval));
       expect([1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]).toContain(interval / magnitude);
+    }
+  });
+});
+
+/**
+ * Terraced contours (docs/02-feature-spec.md F3.1).
+ *
+ * Reported from a print: extruded isolines read as "lines looking like roads
+ * that even go up the contour step". They are correct isolines — that is the
+ * problem. The look people mean is a laser-cut plywood relief map, where the
+ * terrain itself is a stack of flat shelves and the step edge IS the contour.
+ */
+describe('terraceHeightfield', () => {
+  const ramp = () => makeHeightfield(40, 40, (i) => 100 + i * 5, 50);
+
+  it('leaves only multiples of the interval', () => {
+    const hf = ramp();
+    terraceHeightfield(hf, 25);
+    for (const v of hf.data) {
+      expect(v / 25).toBeCloseTo(Math.round(v / 25), 9);
+    }
+  });
+
+  /** Rounded DOWN, so a shelf sits at the level it is named for. */
+  it('rounds down, never up', () => {
+    const before = Array.from(ramp().data);
+    const hf = ramp();
+    terraceHeightfield(hf, 25);
+    for (let i = 0; i < before.length; i++) {
+      expect(hf.data[i]).toBeLessThanOrEqual(before[i] + 1e-9);
+      expect(before[i] - hf.data[i]).toBeLessThan(25);
+    }
+  });
+
+  /** Flat shelves are the whole point: neighbours mostly share a height. */
+  it('makes flat shelves rather than a smooth slope', () => {
+    const hf = ramp();
+    terraceHeightfield(hf, 50);
+    let same = 0;
+    let total = 0;
+    for (let j = 0; j < hf.rows; j++) {
+      for (let i = 1; i < hf.cols; i++) {
+        total++;
+        if (hf.data[j * hf.cols + i] === hf.data[j * hf.cols + i - 1]) same++;
+      }
+    }
+    // A 5 m/cell ramp terraced at 50 m: nine cells in ten are on a shelf.
+    expect(same / total).toBeGreaterThan(0.85);
+  });
+
+  it('updates the range, because the vertical scale is computed from it', () => {
+    const hf = ramp();
+    terraceHeightfield(hf, 25);
+    let min = Infinity;
+    let max = -Infinity;
+    for (const v of hf.data) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    expect(hf.min_m).toBe(min);
+    expect(hf.max_m).toBe(max);
+  });
+
+  it('counts the shelves it made', () => {
+    const hf = ramp();
+    // 100..295 m terraced at 50 m gives shelves at 100, 150, 200, 250.
+    expect(terraceHeightfield(hf, 50)).toBe(4);
+  });
+
+  it('does nothing for an interval that is not a step', () => {
+    const hf = ramp();
+    const before = Array.from(hf.data);
+    expect(terraceHeightfield(hf, 0)).toBe(0);
+    expect(Array.from(hf.data)).toEqual(before);
+  });
+
+  /**
+   * The reason terracing happens before ANYTHING is meshed: a route draping on
+   * the old smooth surface would float over the shelves that replaced it.
+   */
+  it('is visible to the sampler everything else drapes with', () => {
+    const hf = ramp();
+    terraceHeightfield(hf, 50);
+    // Two points on the same shelf read the same height.
+    const a = sampleHeightfieldAt(hf, -800, 0);
+    const b = sampleHeightfieldAt(hf, -790, 0);
+    expect(Math.abs(a - b)).toBeLessThan(1);
+  });
+});
+
+/**
+ * The terrace interval is NOT the line interval.
+ *
+ * `suggestInterval` sizes the step so traced rings stay a ribbon-width apart —
+ * the constraint that keeps thin lines from fusing. A shelf has no such
+ * problem, and reusing that number gave three shelves on a real build where the
+ * laser-cut reference look has ten.
+ */
+/** Mirrors TARGET_SHELVES in contours.ts. */
+const TARGET = 12;
+
+describe('suggestTerraceInterval', () => {
+  it('aims for about a dozen shelves', () => {
+    const interval = suggestTerraceInterval(0, 1200, 0.02, 0.2);
+    const shelves = 1200 / interval;
+    expect(shelves).toBeGreaterThan(7);
+    expect(shelves).toBeLessThan(20);
+  });
+
+  /** A step under two layers is texture, not a step. */
+  it('never proposes a step too shallow to print', () => {
+    // A tiny range with a coarse layer height: the vertical floor must win.
+    const layerHeight_mm = 0.3;
+    const zScale = 0.01;
+    const interval = suggestTerraceInterval(0, 20, zScale, layerHeight_mm);
+    expect(interval * zScale).toBeGreaterThanOrEqual(2 * layerHeight_mm - 1e-9);
+  });
+
+  it('gives back numbers a map would print', () => {
+    for (const range of [50, 300, 1200, 8000]) {
+      const interval = suggestTerraceInterval(0, range, 0.02, 0.2);
+      const mantissa = interval / Math.pow(10, Math.floor(Math.log10(interval)));
+      expect([1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]).toContainEqual(
+        Math.round(mantissa * 10) / 10,
+      );
+    }
+  });
+
+  it('has nothing to say about flat ground', () => {
+    expect(suggestTerraceInterval(500, 500, 0.02, 0.2)).toBe(0);
+  });
+
+  /**
+   * The reported bug, as a property rather than a comparison.
+   *
+   * A first pass reused `suggestInterval` and a real build came out with THREE
+   * shelves where the laser-cut reference look has ten. Which of the two
+   * intervals is numerically larger depends on range against slope and is not
+   * worth asserting.
+   *
+   * The full property has two halves, and the second is not a failure: aim for
+   * about a dozen shelves, UNLESS the model is too short to print them, in
+   * which case the step sits exactly on the two-layer floor. A 1.7 mm tall
+   * model cannot carry twelve readable shelves and should not pretend to.
+   */
+  it('lands near a dozen shelves, or on the printable floor when it cannot', () => {
+    const zScale = 0.02;
+    const layerHeight_mm = 0.2;
+    const floor_m = (2 * layerHeight_mm) / zScale;
+
+    for (const build of [
+      makeHeightfield(60, 60, (i) => 500 + i * 40, 50),
+      makeHeightfield(60, 60, (i, j) => 500 + i * 8 + j * 3, 50),
+      makeHeightfield(60, 60, (i, j) => 500 + Math.hypot(i - 30, j - 30) * 2, 50),
+    ]) {
+      const range = build.max_m - build.min_m;
+      const interval = suggestTerraceInterval(build.min_m, build.max_m, zScale, layerHeight_mm);
+      const shelves = range / interval;
+
+      if (range / TARGET >= floor_m) {
+        expect(shelves).toBeGreaterThan(6);
+        expect(shelves).toBeLessThan(25);
+      } else {
+        // Too short for a dozen: the step is the smallest one that prints.
+        expect(interval * zScale).toBeGreaterThanOrEqual(2 * layerHeight_mm - 1e-9);
+        expect(shelves).toBeGreaterThan(1);
+      }
     }
   });
 });

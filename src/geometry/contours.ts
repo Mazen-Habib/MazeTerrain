@@ -283,3 +283,116 @@ export function traceContours(hf: Heightfield, interval_m: number): ContourResul
 
   return { lines, levels };
 }
+
+/**
+ * Quantise a heightfield into flat steps (docs/02-feature-spec.md F3.1).
+ *
+ * This is the OTHER way to put contours on a model, and on the evidence the one
+ * people actually mean. Tracing isolines and extruding them as ribbons gives
+ * technically-correct contour lines that read as a plate of spaghetti — the
+ * same machinery builds them as builds roads, and on a print they look like
+ * roads, wandering across the slope and climbing over each other.
+ *
+ * A terraced model instead does what a laser-cut plywood relief map does: it
+ * rounds every elevation DOWN to the level below it, so the terrain becomes a
+ * stack of flat shelves with a riser between each pair. There are no lines to
+ * draw — the step edge IS the contour, and it is legible from across a room.
+ *
+ * The whole heightfield is quantised, before anything is meshed or draped, so
+ * routes and features sit on the terraced ground rather than floating over the
+ * smooth surface it used to be. One transform, and everything downstream
+ * inherits it.
+ *
+ * Levels sit at multiples of the interval, like `contourLevels`, so bands break
+ * at 500, 550, 600 — the numbers a map would use.
+ *
+ * The riser between two shelves is one grid cell wide rather than truly
+ * vertical, because the surface is still a grid. At the resolutions this app
+ * builds at, a cell is a fraction of a nozzle width, so it prints as a step.
+ * Making the risers exactly vertical would mean inserting the contour polygons
+ * into the triangulation as constraints, which is a different and much larger
+ * piece of work for a difference no print would show.
+ *
+ * Mutates `hf` in place and updates its min/max, which the caller needs because
+ * the terraced range is up to one interval shorter than the original and the
+ * vertical scale is computed from it.
+ */
+export function terraceHeightfield(hf: Heightfield, interval_m: number): number {
+  if (!(interval_m > 0)) return 0;
+
+  const { data } = hf;
+  let min = Infinity;
+  let max = -Infinity;
+
+  for (let i = 0; i < data.length; i++) {
+    const stepped = Math.floor(data[i] / interval_m) * interval_m;
+    data[i] = stepped;
+    if (stepped < min) min = stepped;
+    if (stepped > max) max = stepped;
+  }
+
+  if (Number.isFinite(min) && Number.isFinite(max)) {
+    hf.min_m = min;
+    hf.max_m = max;
+  }
+
+  // How many distinct shelves the model ends up with — the number worth telling
+  // the user, because one shelf is a plateau and forty is a corduroy texture.
+  return Math.max(1, Math.round((max - min) / interval_m) + 1);
+}
+
+/**
+ * How many shelves a terraced model wants.
+ *
+ * The reference for this look is a laser-cut plywood relief map, and those are
+ * cut from eight to fifteen sheets. Fewer reads as a wedding cake; many more
+ * and the steps shrink below what an FDM printer can show and it goes back to
+ * looking smooth.
+ */
+const TARGET_SHELVES = 12;
+
+/**
+ * An elevation interval for TERRACING, which is not the one for lines.
+ *
+ * `suggestInterval` sizes the step so that traced rings stay a ribbon-width
+ * apart horizontally — that is what keeps thin lines from fusing into a crust.
+ * A terrace has no such problem: a shelf is a wide flat area, and two shelves
+ * being close together horizontally is just a steep slope, which is fine and
+ * true. Reusing the line interval gave three shelves on a real build where the
+ * reference look has ten.
+ *
+ * The binding constraint is vertical instead: a step under about two layer
+ * heights does not read as a step. So aim for `TARGET_SHELVES` bands and raise
+ * the interval only if that would make the steps too shallow to print.
+ */
+export function suggestTerraceInterval(
+  min_m: number,
+  max_m: number,
+  zScale: number,
+  layerHeight_mm: number,
+): number {
+  const range_m = max_m - min_m;
+  if (!(range_m > 0)) return 0;
+
+  const wanted = range_m / TARGET_SHELVES;
+  // Two layers is the smallest step that reads as one rather than as texture.
+  const floor_m = zScale > 0 ? (2 * layerHeight_mm) / zScale : 0;
+
+  return niceStep(Math.max(wanted, floor_m));
+}
+
+/**
+ * Round up to a number a map would print.
+ *
+ * The same ladder `suggestInterval` uses, so a terraced model and a lined one
+ * break at the same elevations and the two are directly comparable.
+ */
+function niceStep(raw_m: number): number {
+  if (!(raw_m > 0)) return 0;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw_m)));
+  for (const step of NICE_STEPS) {
+    const candidate = step * magnitude;
+    if (candidate >= raw_m) return candidate;
+  }
+  return 10 * magnitude;
+}

@@ -42,7 +42,7 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     nozzleDiameter_mm: 0.4,
     bedSize_mm: [256, 256],
     colorMode: 'multicolor',
-    contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7 },
+    contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7, style: 'terraced' },
     frame: { enabled: false, width_mm: 8, height_mm: 3 },
     profile: { enabled: false, depth_mm: 14, height_mm: 1.2 },
     tiling: { enabled: false },

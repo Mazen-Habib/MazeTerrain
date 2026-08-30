@@ -1143,19 +1143,48 @@ export function App() {
                     update({ contours: { ...config.contours, enabled: e.target.checked } })
                   }
                 />
-                Contour lines
+                Contours
               </label>
               <p className="field__hint">
-                Raised rings at fixed heights. Most useful in the single-colour modes, where
-                relief is otherwise only readable from the silhouette.
+                Reads relief at a glance. Most useful in the single-colour modes, where
+                otherwise only the silhouette shows it.
               </p>
             </div>
 
             {config.contours.enabled ? (
               <>
                 <div className="field">
+                  <label className="field__label" htmlFor="contour-style">
+                    Contour style
+                  </label>
+                  <select
+                    id="contour-style"
+                    className="select"
+                    value={config.contours.style}
+                    disabled={busy}
+                    onChange={(e) =>
+                      update({
+                        contours: {
+                          ...config.contours,
+                          style: e.target.value === 'lines' ? 'lines' : 'terraced',
+                        },
+                      })
+                    }
+                  >
+                    <option value="terraced">Terraced — stepped shelves</option>
+                    <option value="lines">Lines — raised rings</option>
+                  </select>
+                  <p className="field__hint">
+                    {config.contours.style === 'terraced'
+                      ? 'The terrain itself becomes flat shelves with a step between each, the way a laser-cut plywood relief map is built. The step edge is the contour, so there is nothing thin to print.'
+                      : 'Traces the contours and raises them as thin rings on the smooth terrain. Technically correct, but at a nozzle wide they read as roads wandering across the slope.'}
+                  </p>
+                </div>
+
+                <div className="field">
                   <label className="field__label">
-                    Contour interval<span className="field__unit">m</span>
+                    {config.contours.style === 'terraced' ? 'Step height' : 'Contour interval'}
+                    <span className="field__unit">m</span>
                   </label>
                   <label className="checkbox">
                     <input

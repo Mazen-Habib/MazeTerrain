@@ -18,7 +18,12 @@ import { findFloatingVertices, repairAndValidate, validateMesh } from './validat
 import { measureParts } from '../export/estimate';
 import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
-import { traceContours, suggestInterval } from './contours';
+import {
+  suggestInterval,
+  suggestTerraceInterval,
+  terraceHeightfield,
+  traceContours,
+} from './contours';
 import { buildFrame, frameSubmersion } from './frame';
 import { buildProfileStrip } from './profile';
 import { splitForBed } from './tiles';
@@ -315,7 +320,67 @@ export async function assemble(
     detail: `Triangulating ${heightfield.cols} x ${heightfield.rows} grid`,
   });
 
+  // --- Terraced contours (F3.1) --------------------------------------------
+  //
+  // Before the scale is settled and before anything is meshed, because it
+  // changes the terrain itself: every later drape, feature and route then sits
+  // on the shelves rather than floating over the smooth surface they replaced.
+  //
+  // The interval needs a vertical scale to choose itself, and the scale needs
+  // the terrain's range, which terracing changes. The circle is broken with a
+  // provisional scale: terracing moves the range by less than one interval, so
+  // it cannot meaningfully change which interval is chosen.
+  let terraceSteps = 0;
+  let terraceInterval_m = 0;
+  if (config.contours.enabled && config.contours.style === 'terraced') {
+    const provisional = resolveScale(config, heightfield.min_m, heightfield.max_m);
+    // Deliberately NOT `suggestInterval`: that one keeps traced rings a
+    // ribbon-width apart, which is meaningless for a shelf and came out four
+    // times too coarse — three shelves where the reference look has ten.
+    terraceInterval_m =
+      config.contours.interval_m === 'auto'
+        ? suggestTerraceInterval(
+            heightfield.min_m,
+            heightfield.max_m,
+            provisional.zScale,
+            config.layerHeight_mm,
+          )
+        : config.contours.interval_m;
+
+    report({
+      stage: 'building-terrain',
+      percent: HEIGHTFIELD_END,
+      detail: `Terracing every ${terraceInterval_m} m`,
+    });
+    terraceSteps = terraceHeightfield(heightfield, terraceInterval_m);
+  }
+
   const scale = resolveScale(config, heightfield.min_m, heightfield.max_m);
+
+  if (terraceSteps > 0) {
+    const step_mm = terraceInterval_m * scale.zScale;
+    if (terraceSteps < 3) {
+      warnings.push({
+        level: 'warn',
+        code: 'terrace-too-few',
+        message:
+          `Terracing at ${terraceInterval_m} m leaves only ${terraceSteps} ` +
+          `step${terraceSteps === 1 ? '' : 's'} — this area spans ` +
+          `${(heightfield.max_m - heightfield.min_m).toFixed(0)} m. Reduce the contour ` +
+          `interval for more shelves.`,
+      });
+    } else if (step_mm < 2 * config.layerHeight_mm) {
+      warnings.push({
+        level: 'warn',
+        code: 'terrace-too-fine',
+        message:
+          `Terrace steps are ${step_mm.toFixed(2)} mm tall, under two ${config.layerHeight_mm} mm ` +
+          `layers, so they will barely show. Raise the contour interval to about ` +
+          `${((2 * config.layerHeight_mm) / scale.zScale).toFixed(0)} m, or raise the vertical ` +
+          `exaggeration.`,
+      });
+    }
+  }
 
   if (scale.exaggerationClamped) {
     warnings.push({
@@ -563,7 +628,10 @@ export async function assemble(
   // Traced as centrelines and then built by the same ribbon-and-drape path the
   // road layers use, so they inherit its fixes rather than repeating them.
   const contourParts: MeshPart[] = [];
-  if (config.contours.enabled) {
+  // Terraced contours are already in the terrain — the step edge IS the
+  // contour, and drawing ribbons on top of it would put lines back on a model
+  // whose whole point is not having them.
+  if (config.contours.enabled && config.contours.style === 'lines') {
     // One nozzle wide: a contour is a hairline by nature, and anything wider
     // reads as a terrace rather than a line.
     const width_m = config.nozzleDiameter_mm / scale.scale;

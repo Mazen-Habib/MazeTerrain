@@ -159,9 +159,24 @@ export interface ContourSettings {
    * (docs/08-pitfalls.md#contours-merge-into-a-crust).
    */
   interval_m: number | 'auto';
-  /** How far a ring stands above the terrain, print mm. */
+  /** How far a ring stands above the terrain, print mm. Only used by 'lines'. */
   lineHeight_mm: number;
+  /**
+   * How contours are put on the model.
+   *
+   * `terraced` quantises the terrain itself into flat shelves, the way a
+   * laser-cut plywood relief map is built — the step edge IS the contour.
+   * `lines` traces isolines and extrudes them as raised ribbons.
+   *
+   * Terraced is the default because it is what people mean. Extruded isolines
+   * are technically correct contour lines and read as a plate of spaghetti:
+   * they are built by the machinery that builds roads, and on a print they look
+   * like roads.
+   */
+  style: ContourStyle;
 }
+
+export type ContourStyle = 'terraced' | 'lines';
 
 /**
  * A flat-topped rim around the inside of the model's boundary.

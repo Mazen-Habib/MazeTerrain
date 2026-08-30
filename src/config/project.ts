@@ -173,6 +173,7 @@ export function restoreSettings(raw: unknown): Settings {
       enabled: bool(contours.enabled, base.contours.enabled),
       interval_m: numOrAuto(contours.interval_m, base.contours.interval_m),
       lineHeight_mm: num(contours.lineHeight_mm, base.contours.lineHeight_mm),
+      style: contours.style === 'lines' ? 'lines' : base.contours.style,
     },
     frame: {
       enabled: bool(frame.enabled, base.frame.enabled),
@@ -473,21 +474,21 @@ function curatedPresets(): NamedPreset[] {
       modelWidth_mm: 150,
       // Real alpine relief needs no help; past this it reads as a spike field.
       verticalExaggeration: 1.25,
-      contours: { enabled: true, interval_m: 'auto', lineHeight_mm: 0.6 },
+      contours: { enabled: true, interval_m: 'auto', lineHeight_mm: 0.6, style: 'terraced' },
     }),
     make('Flat city map', {
       modelWidth_mm: 150,
       // Nothing to see in the relief, so the streets carry the model.
       verticalExaggeration: 3,
       baseThickness_mm: 2.5,
-      contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7 },
+      contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7, style: 'terraced' },
     }),
     make('Single colour, route inlaid', {
       modelWidth_mm: 120,
       colorMode: 'single-cutout',
       cutout: { subMode: 'inlay', clearance_mm: 0.15, insetDepth_mm: 1, insertProud_mm: 0.6, water: false },
       // Relief is otherwise only readable from the silhouette in one colour.
-      contours: { enabled: true, interval_m: 'auto', lineHeight_mm: 0.6 },
+      contours: { enabled: true, interval_m: 'auto', lineHeight_mm: 0.6, style: 'terraced' },
     }),
   ];
 }
