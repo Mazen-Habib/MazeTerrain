@@ -16,21 +16,23 @@ import { idbGet, idbPut, OSM_STORE } from '../idb';
 /**
  * Public Overpass instances, tried in order.
  *
- * More than two, because two is not redundancy. Measured 2026-08-30 from one
- * machine: `overpass-api.de` would not connect at all and `kumi.systems`
- * answered HTTP 500 to even a trivial node query, while `overpass.osm.ch`
- * served real data on the first try. With only the first two configured, every
- * tile of a 63-tile build burned four failed attempts and the whole build came
- * back with nothing — for a reason that had nothing to do with this app.
+ * More than two, because two is not redundancy: measured 2026-08-30, both of
+ * the original pair were unusable from one machine at the same time.
  *
- * These are the instances the OSM wiki lists as public. They are other people's
- * machines: the sequential fetch and the gap between tiles below are what keep
- * this a polite client on all of them.
+ * **Every entry must serve the WHOLE PLANET.** `overpass.osm.ch` was added here
+ * for exactly one day and taken straight back out: it is the Swiss instance, it
+ * answers HTTP 200 with an empty `elements` array for anywhere outside
+ * Switzerland, and the app dutifully reported "No roads found in this area" for
+ * a Pakistani city with three motorways through it. A regional mirror does not
+ * fail — it lies, which is far worse than the outage it was added to fix.
+ * See docs/08-pitfalls.md#a-mirror-that-lies-beats-a-mirror-that-fails.
+ *
+ * These are other people's machines: the sequential fetch and the gap between
+ * tiles below are what keep this a polite client on all of them.
  */
 export const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.osm.ch/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
 ];
 
@@ -274,6 +276,15 @@ export interface FetchOsmOptions {
   tileGapMs?: number;
   /** Injected in tests so the suite does not sit through a rate-limit wait. */
   rateLimitBackoffMs?: number;
+  /**
+   * Which instance answered, reported on every success.
+   *
+   * So an empty result can be traced to a server rather than believed. A
+   * regional mirror returns a perfectly valid empty response for most of the
+   * world, and without knowing who answered there is no way to tell that from
+   * genuinely empty ground.
+   */
+  onEndpoint?: (hostname: string) => void;
 }
 
 /**
@@ -345,6 +356,7 @@ async function fetchOne(
       }
 
       preferredEndpoint = index;
+      options.onEndpoint?.(new URL(endpoint).hostname);
       void writeCache(key, data);
       return data;
     } catch (err) {

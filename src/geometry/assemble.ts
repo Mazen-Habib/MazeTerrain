@@ -463,11 +463,37 @@ export async function assemble(
     report({ stage: 'fetching-osm', percent: TERRAIN_END, detail: 'Fetching map data' });
 
     try {
+      const servers = new Set<string>();
       const response = await fetchOsm(config.bbox, enabledLayers, {
         ...(signal ? { signal } : {}),
         onAttempt: (detail) => report({ stage: 'fetching-osm', percent: TERRAIN_END, detail }),
+        onEndpoint: (hostname) => servers.add(hostname),
       });
       throwIfAborted();
+
+      /**
+       * Nothing at all, from an area that asked for several layers.
+       *
+       * A single empty layer is ordinary — plenty of places have no railway.
+       * EVERY layer empty across a whole selection is not, and the cause is
+       * usually the server rather than the ground: a regional mirror answers
+       * HTTP 200 with an empty result for anywhere outside its extract, and
+       * without saying so the app reports "No roads found in this area" about a
+       * city with three motorways through it. Naming who answered is what makes
+       * that visible instead of plausible.
+       */
+      if (response.elements.length === 0 && enabledLayers.length > 1) {
+        const from = servers.size > 0 ? [...servers].join(', ') : 'the map server';
+        warnings.push({
+          level: 'warn',
+          code: 'osm-empty',
+          message:
+            `OpenStreetMap returned no features at all for this area, from ${from}. For ` +
+            `anywhere with roads or rivers on the map that points at the server rather than ` +
+            `the ground — it may hold only a regional extract. Try again to fall back to ` +
+            `another instance.`,
+        });
+      }
 
       const features = normalise(response);
       report({

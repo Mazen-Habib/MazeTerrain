@@ -668,3 +668,46 @@ describe('choosing an Overpass instance', () => {
     expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe(working);
   });
 });
+
+/**
+ * Every configured instance must serve the whole planet.
+ *
+ * `overpass.osm.ch` lived in this list for one day. It is the Swiss instance:
+ * it answers HTTP 200 with an empty `elements` array for anywhere outside
+ * Switzerland, so the app reported "No roads found in this area" about a
+ * Pakistani city with three motorways through it. Verified by measurement —
+ * 5 ways inside Switzerland, 0 for the same query over Punjab.
+ *
+ * A regional mirror does not fail. It lies, which is worse than the outage it
+ * was added to fix.
+ */
+describe('only planet-wide instances are configured', () => {
+  /** Instances known to serve a regional extract rather than the planet. */
+  const REGIONAL = ['overpass.osm.ch', 'overpass.osm.jp', 'overpass.nchc.org.tw'];
+
+  it('lists no known regional mirror', () => {
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      expect(REGIONAL).not.toContain(new URL(endpoint).hostname);
+    }
+  });
+
+  it('reports which instance answered, so an empty result can be traced', async () => {
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(
+      async () => ({ ok: true, status: 200, json: async () => ({ elements: [] }) }) as unknown as Response,
+    );
+
+    await fetchOsm(
+      { west: 7.72, south: 45.974, east: 7.722, north: 45.976 },
+      ['roads'],
+      {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        backoffMs: 1,
+        onEndpoint: (host) => seen.push(host),
+      },
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(OVERPASS_ENDPOINTS.map((e) => new URL(e).hostname)).toContain(seen[0]);
+  });
+});
