@@ -908,6 +908,52 @@ export function App() {
               <label className="checkbox">
                 <input
                   type="checkbox"
+                  checked={config.profile.enabled}
+                  disabled={busy || routes.length === 0}
+                  onChange={(e) =>
+                    update({ profile: { ...config.profile, enabled: e.target.checked } })
+                  }
+                />
+                Elevation profile
+              </label>
+              <p className="field__hint">
+                {routes.length === 0
+                  ? 'Needs a route — the profile charts the climb along one.'
+                  : 'A bar below the model showing the route’s climb: distance left to right, height up. Heights come from the same terrain the model is built on. It makes the print taller.'}
+              </p>
+            </div>
+
+            {config.profile.enabled && routes.length > 0 ? (
+              <>
+                <NumberField
+                  label="Profile depth"
+                  unit="mm"
+                  value={config.profile.depth_mm}
+                  min={6}
+                  max={40}
+                  step={1}
+                  disabled={busy}
+                  onChange={(v) => update({ profile: { ...config.profile, depth_mm: v } })}
+                  hint={`How tall the chart is. The print grows to about ${(config.modelWidth_mm + config.profile.depth_mm - 3).toFixed(0)} mm front to back.`}
+                />
+                <NumberField
+                  label="Profile relief"
+                  unit="mm"
+                  value={config.profile.height_mm}
+                  min={0.4}
+                  max={5}
+                  step={0.1}
+                  disabled={busy}
+                  onChange={(v) => update({ profile: { ...config.profile, height_mm: v } })}
+                  hint="How far the climb stands off the bar."
+                />
+              </>
+            ) : null}
+
+            <div className="field">
+              <label className="checkbox">
+                <input
+                  type="checkbox"
                   checked={config.frame.enabled}
                   disabled={busy}
                   onChange={(e) => update({ frame: { ...config.frame, enabled: e.target.checked } })}

@@ -161,6 +161,21 @@ export interface ContourSettings {
  * separate "brim", because a brim is a bed-adhesion setting that belongs to the
  * slicer and a narrow frame is the decorative lip the spec wanted.
  */
+/**
+ * Elevation profile strip (docs/02-feature-spec.md F11).
+ *
+ * A bar below the model carrying the route's climb as a chart. Off by default:
+ * it changes the model's outline, which is not something to do to someone
+ * without being asked.
+ */
+export interface ProfileSettings {
+  enabled: boolean;
+  /** Depth of the bar, print mm. The chart's height on the page. */
+  depth_mm: number;
+  /** How far the profile ridge stands above the bar, print mm. */
+  height_mm: number;
+}
+
 export interface FrameSettings {
   enabled: boolean;
   /** Band width, print mm. Narrow reads as an edge lip, wide as a picture frame. */
@@ -231,6 +246,8 @@ export interface GenerateConfig {
   contours: ContourSettings;
   /** docs/02-feature-spec.md F5. */
   frame: FrameSettings;
+  /** docs/02-feature-spec.md F11. */
+  profile: ProfileSettings;
   /** docs/02-feature-spec.md F5.1. */
   label: LabelSettings;
   /**

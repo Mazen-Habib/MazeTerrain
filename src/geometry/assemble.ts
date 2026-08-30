@@ -10,7 +10,7 @@ import { buildMosaic, TileFetchError } from '../data/dem/fetchTiles';
 import { getDataset } from '../data/dem/datasets';
 import { inpaintNoData } from '../data/dem/sampler';
 import { chooseZoom, tileRangeForBBox } from '../data/dem/tiles';
-import { resolveGrid, resolveScale, worldToPrint } from './coords';
+import { projectENU, resolveGrid, resolveScale, worldToPrint } from './coords';
 import { buildHeightfield, sampleHeightfieldAt, smoothHeightfield } from './heightfield';
 import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
@@ -20,6 +20,7 @@ import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
 import { traceContours, suggestInterval } from './contours';
 import { buildFrame, frameSubmersion } from './frame';
+import { buildProfileStrip } from './profile';
 import { buildBaseline, buildLabelTool, labelCoverage } from './label';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
 import type { MultiPolygon } from './polygons';
@@ -119,6 +120,16 @@ const CUT_TOOL_HEADROOM_MM = 5;
  * along a third of its length is not a rim.
  */
 const FRAME_SUBMERSION_LIMIT = 0.15;
+
+/**
+ * How far the profile bar is pushed into the model's boundary, print mm.
+ *
+ * A structural minimum rather than a setting. A straight bar meets a circular
+ * model at a single tangent point, and a joint with no area is not a joint;
+ * 3 mm of overlap gives a 35 mm wide contact on a 100 mm disc. Exposing it as a
+ * control would only offer the user a way to snap the bar off.
+ */
+const PROFILE_OVERLAP_MM = 3;
 
 /** Tallest a label may be relative to the frame it is cut into. */
 const LABEL_MAX_SHARE_OF_FRAME = 0.55;
@@ -1002,6 +1013,78 @@ export async function assemble(
     }
   }
 
+  // --- Stage 8b: elevation profile strip (F11) ------------------------------
+  //
+  // After the routes, because it charts one of them. The FIRST visible route:
+  // two profiles overlaid on one bar would be unreadable, and picking one is
+  // more useful than refusing when there are two.
+  const profileParts: MeshPart[] = [];
+  if (config.profile.enabled && visibleRoutes.length > 0) {
+    report({
+      stage: 'building-routes',
+      percent: ROUTES_END,
+      detail: 'Charting the climb',
+    });
+
+    const record = visibleRoutes[0];
+    const routeXY_m = record.points.map(
+      (p) => projectENU(p.lon, p.lat, scale.origin) as [number, number],
+    );
+
+    const built = buildProfileStrip(routeXY_m, featureClip, heightfield, {
+      depth_mm: config.profile.depth_mm,
+      height_mm: config.profile.height_mm,
+      // Enough contact to fuse a straight bar to a curved boundary without
+      // eating into the map. Not a setting: it is a structural minimum, and
+      // exposing it would only offer the user a way to break the joint.
+      overlap_mm: PROFILE_OVERLAP_MM,
+      baseThickness_mm: config.baseThickness_mm,
+      scale,
+    });
+
+    if (built.mesh.triangles > 0) {
+      profileParts.push({
+        name: 'profile',
+        color: TERRAIN_COLOR,
+        positions: built.mesh.positions,
+        indices: built.mesh.indices,
+        manifold: true,
+      });
+
+      const covered = built.stats?.covered ?? 1;
+      if (covered < 0.98) {
+        warnings.push({
+          level: 'warn',
+          code: 'profile-clipped',
+          message:
+            `The elevation profile covers ${(covered * 100).toFixed(0)}% of "${record.name}" — ` +
+            `the rest runs outside your selection, where there is no terrain to read a height ` +
+            `from. Use "Fit selection to routes" to chart all of it.`,
+        });
+      }
+
+      if (visibleRoutes.length > 1) {
+        warnings.push({
+          level: 'warn',
+          code: 'profile-first-route',
+          message:
+            `The elevation profile charts "${record.name}" only. With ${visibleRoutes.length} ` +
+            `routes visible, the others are not on the bar — hide the ones you do not want it ` +
+            `to describe.`,
+        });
+      }
+    } else {
+      warnings.push({
+        level: 'warn',
+        code: 'profile-empty',
+        message:
+          `The elevation profile could not be drawn for "${record.name}" — the route needs ` +
+          `two points and some length before there is a climb to chart.`,
+      });
+    }
+    throwIfAborted();
+  }
+
   // --- Stage 9: validate ----------------------------------------------------
   report({ stage: 'validating', percent: ROUTES_END, detail: 'Checking the mesh is watertight' });
 
@@ -1011,7 +1094,13 @@ export async function assemble(
   // Each route is validated as its own closed solid. In multicolour mode the
   // parts stay separate and overlaps are expected — the route deliberately
   // penetrates the terrain (docs/05-geometry-pipeline.md Stage 7).
-  for (const part of [...featureParts, ...contourParts, ...frameParts, ...routeParts]) {
+  for (const part of [
+    ...featureParts,
+    ...contourParts,
+    ...frameParts,
+    ...profileParts,
+    ...routeParts,
+  ]) {
     // Feature layers are a MERGE of many closed solids that legitimately touch
     // at junctions. Welding them would fuse those solids into edges with four
     // adjacent faces and report a non-manifold layer that is nothing of the
@@ -1079,7 +1168,14 @@ export async function assemble(
     manifold: validation.manifold,
   };
 
-  let parts = [terrainPart, ...featureParts, ...contourParts, ...frameParts, ...routeParts];
+  let parts = [
+    terrainPart,
+    ...featureParts,
+    ...contourParts,
+    ...frameParts,
+    ...profileParts,
+    ...routeParts,
+  ];
 
   // Anything draped should sit within its own height of the ground. When it
   // does not it shows as a cone or blade standing out of the model, and every
@@ -1130,7 +1226,7 @@ export async function assemble(
         ];
       } else {
         // Everything except the routes is the body; the routes become the tool.
-        const body = [terrainPart, ...featureParts, ...contourParts, ...frameParts];
+        const body = [terrainPart, ...featureParts, ...contourParts, ...frameParts, ...profileParts];
         const base =
           body.length === 1
             ? body[0]
@@ -1168,7 +1264,14 @@ export async function assemble(
               `${err instanceof Error ? err.message : String(err)}. ` +
               `The model was left as separate parts instead.`,
       });
-      parts = [terrainPart, ...featureParts, ...contourParts, ...frameParts, ...routeParts];
+      parts = [
+        terrainPart,
+        ...featureParts,
+        ...contourParts,
+        ...frameParts,
+        ...profileParts,
+        ...routeParts,
+      ];
     }
   }
 
