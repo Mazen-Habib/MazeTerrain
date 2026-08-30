@@ -1289,6 +1289,27 @@ export function App() {
                     </p>
                   </>
                 ) : null}
+
+                <div className="field">
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={config.cutout.water}
+                      disabled={busy || !config.layers['water']?.enabled}
+                      onChange={(e) =>
+                        update({ cutout: { ...config.cutout, water: e.target.checked } })
+                      }
+                    />
+                    Cut the water out too
+                  </label>
+                  <p className="field__hint">
+                    {!config.layers['water']?.enabled
+                      ? 'Turn the Water layer on under Layers, and lakes and rivers can be cut out as well.'
+                      : config.cutout.subMode === 'inlay'
+                        ? 'Lakes and rivers become a basin plus a second insert, to print in blue and press in. Its top is flat — water is level, whatever the ground under it does.'
+                        : 'Lakes and rivers become a recessed basin to paint or fill. Switch Cutout style to Inlay to get a piece to press in instead.'}
+                  </p>
+                </div>
               </>
             ) : null}
 

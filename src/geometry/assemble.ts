@@ -22,6 +22,7 @@ import { traceContours, suggestInterval } from './contours';
 import { buildFrame, frameSubmersion } from './frame';
 import { buildProfileStrip } from './profile';
 import { splitForBed } from './tiles';
+import { buildWaterCut } from './waterCut';
 import { printUnit } from '../export/layout';
 import { buildBaseline, buildLabelTool, labelCoverage } from './label';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
@@ -352,6 +353,8 @@ export async function assemble(
     (id) => config.layers[id]?.enabled && LAYER_BY_ID[id],
   );
   const featureParts: MeshPart[] = [];
+  /** The water layer's flat footprint in world metres, for the cut-out (F6.4). */
+  let waterFootprint: MultiPolygon | null = null;
 
   if (enabledLayers.length > 0) {
     report({ stage: 'fetching-osm', percent: TERRAIN_END, detail: 'Fetching map data' });
@@ -417,6 +420,9 @@ export async function assemble(
               triangleBudget: remaining,
             });
         if (built.part) featureParts.push(built.part);
+        // Kept for the water cut-out (F6.4), which carves the SAME footprint
+        // rather than rebuilding it from the OSM features and risking drift.
+        if (layer === 'water' && built.footprint) waterFootprint = built.footprint;
         featureTriangles += built.stats.triangles;
         layerSummaries.push({
           layer,
@@ -1011,6 +1017,109 @@ export async function assemble(
         percent: TERRAIN_END + ((ROUTES_END - TERRAIN_END) * (i + 1)) / visibleRoutes.length,
         detail: `Route ${i + 1} of ${visibleRoutes.length}`,
       });
+      throwIfAborted();
+    }
+  }
+
+  // --- Stage 8a: water as a cut-out (F6.4) ----------------------------------
+  //
+  // Rides the same machinery as the route cut-out: the tool joins `cutTools`
+  // so one subtract carves everything, and the piece joins `insertParts` so it
+  // is laid out and exported like any other separately-printed piece.
+  //
+  // The clearance cannot be had the route's way. A route is a ribbon built
+  // from a centreline and a width, so its insert is made by shrinking that
+  // width; water is a sheet of arbitrary rings with holes for islands, and
+  // there is no width to shrink. So the insert is pulled in by subtracting a
+  // collar straddling its own boundary — see `waterCut.ts`.
+  if (wantsCut && config.cutout.water) {
+    if (!waterFootprint || waterFootprint.length === 0) {
+      warnings.push({
+        level: 'warn',
+        code: 'water-cutout-empty',
+        message:
+          'Water cut-out is on, but this selection has no water to cut. Turn the Water ' +
+          'layer on, or pick an area with a lake, river or coastline in it.',
+      });
+    } else if (toolTop_mm === undefined) {
+      warnings.push({
+        level: 'warn',
+        code: 'water-cutout-empty',
+        message: 'Water cut-out is on, but the model has no height to cut through.',
+      });
+    } else {
+      report({ stage: 'building-routes', percent: ROUTES_END, detail: 'Carving the water' });
+
+      const cut = buildWaterCut(waterFootprint, config.cutout.clearance_mm, {
+        depth_mm: config.cutout.insetDepth_mm,
+        proud_mm: config.cutout.insertProud_mm,
+        toolTop_mm,
+        baseThickness_mm: config.baseThickness_mm,
+        scale,
+        terrainStep_m: Math.max(heightfield.spacingX_m, heightfield.spacingY_m),
+        gridOrigin_m: [
+          -((heightfield.cols - 1) * heightfield.spacingX_m) / 2,
+          -((heightfield.rows - 1) * heightfield.spacingY_m) / 2,
+        ],
+        drapeZ: (x_m, y_m) =>
+          worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2],
+      });
+
+      if (cut && cut.tool.triangles > 0) {
+        cutTools.push({
+          name: 'water-cut',
+          color: TERRAIN_COLOR,
+          positions: cut.tool.positions,
+          indices: cut.tool.indices,
+          manifold: true,
+        });
+
+        if (config.cutout.subMode === 'inlay' && cut.insert.triangles > 0) {
+          const raw: MeshPart = {
+            name: 'insert:water',
+            color: config.layers['water']?.color ?? TERRAIN_COLOR,
+            positions: cut.insert.positions,
+            indices: cut.insert.indices,
+            manifold: true,
+          };
+
+          // The collar is what makes the insert smaller than the hole. With no
+          // clearance asked for there is no collar and the piece is a press fit
+          // of exactly zero, which is the user's call to make.
+          if (cut.collar.triangles > 0) {
+            try {
+              insertParts.push(
+                await subtractParts(
+                  raw,
+                  [
+                    {
+                      name: 'water-collar',
+                      color: TERRAIN_COLOR,
+                      positions: cut.collar.positions,
+                      indices: cut.collar.indices,
+                      manifold: true,
+                    },
+                  ],
+                  { name: raw.name, color: raw.color },
+                ),
+              );
+            } catch (err) {
+              if (err instanceof DOMException && err.name === 'AbortError') throw err;
+              warnings.push({
+                level: 'warn',
+                code: 'water-clearance-failed',
+                message:
+                  `Could not apply the ${config.cutout.clearance_mm} mm clearance to the water ` +
+                  `insert: ${err instanceof Error ? err.message : String(err)}. It was left ` +
+                  `full size, so it will be a tight fit — sand it, or raise the clearance.`,
+              });
+              insertParts.push(raw);
+            }
+          } else {
+            insertParts.push(raw);
+          }
+        }
+      }
       throwIfAborted();
     }
   }

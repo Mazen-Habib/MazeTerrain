@@ -167,6 +167,7 @@ export function restoreSettings(raw: unknown): Settings {
       clearance_mm: num(cutout.clearance_mm, base.cutout.clearance_mm),
       insetDepth_mm: num(cutout.insetDepth_mm, base.cutout.insetDepth_mm),
       insertProud_mm: num(cutout.insertProud_mm, base.cutout.insertProud_mm),
+      water: bool(cutout.water, base.cutout.water),
     },
     contours: {
       enabled: bool(contours.enabled, base.contours.enabled),
@@ -484,7 +485,7 @@ function curatedPresets(): NamedPreset[] {
     make('Single colour, route inlaid', {
       modelWidth_mm: 120,
       colorMode: 'single-cutout',
-      cutout: { subMode: 'inlay', clearance_mm: 0.15, insetDepth_mm: 1, insertProud_mm: 0.6 },
+      cutout: { subMode: 'inlay', clearance_mm: 0.15, insetDepth_mm: 1, insertProud_mm: 0.6, water: false },
       // Relief is otherwise only readable from the silhouette in one colour.
       contours: { enabled: true, interval_m: 'auto', lineHeight_mm: 0.6 },
     }),

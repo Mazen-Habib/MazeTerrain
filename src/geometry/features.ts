@@ -632,6 +632,16 @@ export function planLineLayer(
 export interface LineLayerResult {
   part: MeshPart | null;
   stats: FeatureBuildStats;
+  /**
+   * The layer's flat footprint in WORLD METRES, for a polygon layer.
+   *
+   * Kept so a cut-out can carve the same shape out of the model rather than
+   * rebuilding it from the OSM features a second time and risking the two
+   * drifting apart — the same reason the route's cutting tool is built from the
+   * same centreline and width as the visible route. Null for line layers and
+   * for buildings, which are per-feature solids rather than one sheet.
+   */
+  footprint?: MultiPolygon;
 }
 
 /**
@@ -1022,7 +1032,9 @@ export function buildPolygonLayer(
     stats.width_mm = height_mm;
   }
 
-  if (solids.length === 0) return { part: null, stats };
+  const footprint = !isBuildings && sheet.length > 0 ? sheet : undefined;
+
+  if (solids.length === 0) return { part: null, stats, ...(footprint ? { footprint } : {}) };
 
   const merged = mergeSolids(solids);
   stats.triangles = merged.triangles;
@@ -1036,6 +1048,7 @@ export function buildPolygonLayer(
       manifold: true,
     },
     stats,
+    ...(footprint ? { footprint } : {}),
   };
 }
 

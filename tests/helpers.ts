@@ -47,7 +47,13 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     profile: { enabled: false, depth_mm: 14, height_mm: 1.2 },
     tiling: { enabled: false },
     label: { text: '', capHeight_mm: 4, depth_mm: 0.6, strokeWidth_mm: 'auto' },
-    cutout: { subMode: 'groove', clearance_mm: 0.15, insetDepth_mm: 1.0, insertProud_mm: 0.4 },
+    cutout: {
+      subMode: 'groove',
+      clearance_mm: 0.15,
+      insetDepth_mm: 1.0,
+      insertProud_mm: 0.4,
+      water: false,
+    },
     layers: defaultLayers(),
     ...overrides,
   };

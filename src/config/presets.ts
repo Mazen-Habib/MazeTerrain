@@ -115,6 +115,9 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
       // Flush by default: the insert drops in and the surface reads as one
       // piece. Raising it is the route's Height control, under Routes.
       insertProud_mm: 0,
+      // Off by default: cutting water out is a big change to what comes out of
+      // the printer, and most models want it left as a raised layer.
+      water: false,
     },
     layers: defaultLayers(),
   };

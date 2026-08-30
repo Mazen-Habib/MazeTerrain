@@ -131,6 +131,15 @@ export interface CutoutSettings {
   insetDepth_mm: number;
   /** How far the insert stands above the terrain once seated. */
   insertProud_mm: number;
+  /**
+   * Cut the water layer out too, so lakes and rivers print as their own piece.
+   *
+   * Separate from the route because they are separate decisions: plenty of
+   * models want a two-tone route on a plain terrain, and a coastal model may
+   * want blue water and no route at all. Both can be on at once — they become
+   * two inserts.
+   */
+  water: boolean;
 }
 
 /**
