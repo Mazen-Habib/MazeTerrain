@@ -30,6 +30,7 @@ import {
   type SelectionShape,
 } from '../geometry/selection';
 import type {
+  BBox,
   ColorMode,
   CutoutSubMode,
   GenerateConfig,
@@ -100,6 +101,28 @@ const SHADING: Array<{ id: ShadingMode; label: string }> = [
   { id: 'slope', label: 'Slope' },
   { id: 'wireframe', label: 'Wireframe' },
 ];
+
+/**
+ * Bounds of a lon/lat list, by loop.
+ *
+ * Never `Math.min(...points.map(...))`: spread arguments blow the call stack
+ * past roughly 100k elements (docs/08-pitfalls.md#call-stack-overflow). A
+ * drawn route is small, but a recorded one is not, and the shape of the code
+ * is what gets copied to the next place.
+ */
+function bboxOfPoints(points: readonly LonLat[]): BBox {
+  let west = Infinity;
+  let east = -Infinity;
+  let south = Infinity;
+  let north = -Infinity;
+  for (const [lon, lat] of points) {
+    if (lon < west) west = lon;
+    if (lon > east) east = lon;
+    if (lat < south) south = lat;
+    if (lat > north) north = lat;
+  }
+  return { west, east, south, north };
+}
 
 function toSerialisable(routes: Route[]): SerialisableRoute[] {
   return routes.map((r) => ({
@@ -285,12 +308,7 @@ export function App() {
         distance_m: routeDistance(points.map(([lon, lat]) => ({ lon, lat }))),
         // No recorded elevation to gain: a drawn route drapes on the DEM.
         elevationGain_m: null,
-        bbox: {
-          west: Math.min(...points.map((p) => p[0])),
-          east: Math.max(...points.map((p) => p[0])),
-          south: Math.min(...points.map((p) => p[1])),
-          north: Math.max(...points.map((p) => p[1])),
-        },
+        bbox: bboxOfPoints(points),
         style: defaultRouteStyle(ROUTE_PALETTE[current.length % ROUTE_PALETTE.length]),
       };
       return [...current, route];
@@ -359,12 +377,7 @@ export function App() {
               ...r,
               points: next,
               distance_m: routeDistance(next),
-              bbox: {
-                west: Math.min(...points.map((p) => p[0])),
-                east: Math.max(...points.map((p) => p[0])),
-                south: Math.min(...points.map((p) => p[1])),
-                north: Math.max(...points.map((p) => p[1])),
-              },
+              bbox: bboxOfPoints(points),
             }
           : r,
       ),
@@ -402,7 +415,7 @@ export function App() {
       const failures: string[] = [];
       for (const file of Array.from(files)) {
         try {
-          parsed.push(...parseGpxText(await file.text(), file.name));
+          for (const route of parseGpxText(await file.text(), file.name)) parsed.push(route);
         } catch (err) {
           failures.push(err instanceof GpxParseError ? err.userMessage : String(err));
         }

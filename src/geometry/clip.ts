@@ -210,6 +210,8 @@ export function clipPolygonToRing(polygon: Polygon, clip: Ring, clipPieces?: Rin
 export function clipMultiPolygonToRing(multi: MultiPolygon, clip: Ring): MultiPolygon {
   const pieces = convexPieces(clip);
   const out: MultiPolygon = [];
-  for (const polygon of multi) out.push(...clipPolygonToRing(polygon, clip, pieces));
+  for (const polygon of multi) {
+    for (const piece of clipPolygonToRing(polygon, clip, pieces)) out.push(piece);
+  }
   return out;
 }

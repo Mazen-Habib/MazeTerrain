@@ -105,7 +105,7 @@ export function assembleRings(
         const last = candidate[candidate.length - 1];
 
         if (Math.hypot(head[0] - tail[0], head[1] - tail[1]) < CLOSED_EPSILON) {
-          ring.push(...candidate.slice(1));
+          for (let k = 1; k < candidate.length; k++) ring.push(candidate[k]);
         } else if (Math.hypot(last[0] - tail[0], last[1] - tail[1]) < CLOSED_EPSILON) {
           for (let k = candidate.length - 2; k >= 0; k--) ring.push(candidate[k]);
         } else {

@@ -940,7 +940,7 @@ export function buildPolygonLayer(
     stats.features++;
 
     if (!isBuildings) {
-      sheet.push(...clipped);
+      for (const ring of clipped) sheet.push(ring);
       continue;
     }
 

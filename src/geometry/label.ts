@@ -143,8 +143,12 @@ export function buildBaseline(ring: Ring, offset_mm: number): Baseline | null {
   // bottom, the one nearest the centre line — on a rectangle that is the middle
   // of the bottom edge, on a circle the lowest point.
   let minY = Infinity;
-  for (const [, y] of dense) minY = Math.min(minY, y);
-  const band = Math.max(PATH_STEP_MM, (Math.max(...dense.map((p) => p[1])) - minY) * 0.001);
+  let maxY = -Infinity;
+  for (const [, y] of dense) {
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const band = Math.max(PATH_STEP_MM, (maxY - minY) * 0.001);
   let start = 0;
   let bestDx = Infinity;
   for (let i = 0; i < dense.length; i++) {
