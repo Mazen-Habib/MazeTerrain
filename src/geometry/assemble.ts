@@ -332,6 +332,8 @@ export async function assemble(
   // it cannot meaningfully change which interval is chosen.
   let terraceSteps = 0;
   let terraceInterval_m = 0;
+  /** The elevation span BEFORE terracing, for messages that mean something. */
+  let terraceSpan_m = 0;
   if (config.contours.enabled && config.contours.style === 'terraced') {
     const provisional = resolveScale(config, heightfield.min_m, heightfield.max_m);
     // Deliberately NOT `suggestInterval`: that one keeps traced rings a
@@ -347,12 +349,49 @@ export async function assemble(
           )
         : config.contours.interval_m;
 
-    report({
-      stage: 'building-terrain',
-      percent: HEIGHTFIELD_END,
-      detail: `Terracing every ${terraceInterval_m} m`,
-    });
-    terraceSteps = terraceHeightfield(heightfield, terraceInterval_m);
+    // The span BEFORE terracing. Reporting it afterwards is meaningless — a
+    // terrace that collapses everything to one level leaves a range of exactly
+    // zero, and the warning then told the user their area "spans 0 m", which
+    // is both alarming and false.
+    const span_m = heightfield.max_m - heightfield.min_m;
+
+    // Terracing to a single level does not make a coarse model, it makes a FLAT
+    // one: every height rounds to the same shelf and the terrain is gone. Far
+    // better to leave the relief alone and say why.
+    if (span_m < 2 * terraceInterval_m) {
+      const fits = suggestTerraceInterval(
+        heightfield.min_m,
+        heightfield.max_m,
+        provisional.zScale,
+        config.layerHeight_mm,
+      );
+      // `fits` is the smallest interval whose steps would still print. When
+      // even that cannot divide the span, no interval can, and suggesting one
+      // sends the user in a circle — the first version of this message
+      // recommended the very number that had just failed.
+      const hopeless = fits <= 0 || span_m < 2 * fits;
+      warnings.push({
+        level: 'warn',
+        code: 'terrace-too-coarse',
+        message: hopeless
+          ? `This area spans only ${span_m.toFixed(0)} m, which is too little relief to ` +
+            `terrace at all — every shelf would be thinner than a printed layer. Terracing ` +
+            `was skipped. Pick an area with more elevation change, or raise the vertical ` +
+            `exaggeration.`
+          : `A ${terraceInterval_m} m contour interval would flatten this model — the area ` +
+            `only spans ${span_m.toFixed(0)} m, so every height rounds to the same shelf. ` +
+            `Terracing was skipped. Use about ${fits} m, or switch the contour interval to ` +
+            `Auto.`,
+      });
+    } else {
+      report({
+        stage: 'building-terrain',
+        percent: HEIGHTFIELD_END,
+        detail: `Terracing every ${terraceInterval_m} m`,
+      });
+      terraceSteps = terraceHeightfield(heightfield, terraceInterval_m);
+      terraceSpan_m = span_m;
+    }
   }
 
   const scale = resolveScale(config, heightfield.min_m, heightfield.max_m);
@@ -366,8 +405,7 @@ export async function assemble(
         message:
           `Terracing at ${terraceInterval_m} m leaves only ${terraceSteps} ` +
           `step${terraceSteps === 1 ? '' : 's'} — this area spans ` +
-          `${(heightfield.max_m - heightfield.min_m).toFixed(0)} m. Reduce the contour ` +
-          `interval for more shelves.`,
+          `${terraceSpan_m.toFixed(0)} m. Reduce the contour interval for more shelves.`,
       });
     } else if (step_mm < 2 * config.layerHeight_mm) {
       warnings.push({

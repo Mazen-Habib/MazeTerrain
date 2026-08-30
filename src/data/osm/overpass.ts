@@ -13,13 +13,43 @@ import type { BBox } from '../../geometry/types';
 import type { LayerId } from './tags';
 import { idbGet, idbPut, OSM_STORE } from '../idb';
 
+/**
+ * Public Overpass instances, tried in order.
+ *
+ * More than two, because two is not redundancy. Measured 2026-08-30 from one
+ * machine: `overpass-api.de` would not connect at all and `kumi.systems`
+ * answered HTTP 500 to even a trivial node query, while `overpass.osm.ch`
+ * served real data on the first try. With only the first two configured, every
+ * tile of a 63-tile build burned four failed attempts and the whole build came
+ * back with nothing — for a reason that had nothing to do with this app.
+ *
+ * These are the instances the OSM wiki lists as public. They are other people's
+ * machines: the sequential fetch and the gap between tiles below are what keep
+ * this a polite client on all of them.
+ */
 export const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.osm.ch/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
 ];
 
+/**
+ * The endpoint that last answered, tried first next time.
+ *
+ * Without this, every tile starts again at the head of the list and pays the
+ * same timeouts on the same dead instance. One tile discovering a working
+ * mirror should be enough for the other sixty-two — which is the difference
+ * between a build that works and one that gives up.
+ *
+ * Module-level and deliberately not persisted: which instance is healthy is a
+ * fact about the next few minutes, not about the user.
+ */
+let preferredEndpoint = 0;
+
 const TIMEOUT_S = 60;
-const MAX_ATTEMPTS = 4;
+/** At least one attempt per endpoint, plus one for a transient failure. */
+const MAX_ATTEMPTS = OVERPASS_ENDPOINTS.length + 1;
 const BASE_BACKOFF_MS = 1500;
 
 /**
@@ -271,7 +301,9 @@ async function fetchOne(
   let lastError: unknown;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const endpoint = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
+    // Start at whichever instance last worked, then walk the rest.
+    const index = (preferredEndpoint + attempt) % OVERPASS_ENDPOINTS.length;
+    const endpoint = OVERPASS_ENDPOINTS[index];
     if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
     try {
@@ -312,6 +344,7 @@ async function fetchOne(
         throw new OverpassError('Overpass response had no elements array', 'Malformed response from OpenStreetMap.');
       }
 
+      preferredEndpoint = index;
       void writeCache(key, data);
       return data;
     } catch (err) {

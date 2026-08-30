@@ -15,6 +15,7 @@ import {
   fetchOsm,
   mergeResponses,
   OverpassError,
+  OVERPASS_ENDPOINTS,
   tileBBox,
 } from '../src/data/osm/overpass';
 import { assembleRings, isClosed, normalise } from '../src/data/osm/normalise';
@@ -594,5 +595,76 @@ describe('isClosed', () => {
     expect(isClosed([[0, 0], [1, 0], [1, 1], [0, 0]])).toBe(true);
     expect(isClosed([[0, 0], [1, 0], [1, 1]])).toBe(false);
     expect(isClosed([[0, 0], [1, 0]])).toBe(false);
+  });
+});
+
+/**
+ * Endpoint failover (docs/04-data-sources.md).
+ *
+ * Measured from one machine on 2026-08-30: `overpass-api.de` would not connect
+ * and `kumi.systems` answered HTTP 500 to a trivial node query, while
+ * `overpass.osm.ch` served real data on the first try. With only those two
+ * configured, every tile of a 63-tile build burned its attempts on dead
+ * instances and the build came back with nothing.
+ */
+describe('choosing an Overpass instance', () => {
+  const ok = (body: unknown) =>
+    ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+  const dead = () => Promise.reject(new TypeError('Failed to fetch'));
+
+  it('lists more than two instances, because two is not redundancy', () => {
+    expect(OVERPASS_ENDPOINTS.length).toBeGreaterThan(2);
+    expect(new Set(OVERPASS_ENDPOINTS).size).toBe(OVERPASS_ENDPOINTS.length);
+  });
+
+  it('tries every instance before giving up', async () => {
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      seen.push(new URL(url).hostname);
+      return dead();
+    });
+
+    await expect(
+      fetchOsm(SMALL_BBOX, ['roads'], {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        backoffMs: 1,
+      }),
+    ).rejects.toThrow();
+
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      expect(seen).toContain(new URL(endpoint).hostname);
+    }
+  });
+
+  /**
+   * The one that matters for a big build: a tile that finds a working instance
+   * must not send the next tile back to the dead one.
+   */
+  it('remembers the instance that worked and goes there first next time', async () => {
+    const working = OVERPASS_ENDPOINTS[OVERPASS_ENDPOINTS.length - 1];
+
+    const fetchImpl = vi.fn(async (url: string) =>
+      url === working ? ok({ elements: [{ type: 'way', id: 1 }] }) : dead(),
+    );
+
+    // First call walks the list and finds the last one.
+    await fetchOsm(SMALL_BBOX, ['roads'], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      backoffMs: 1,
+    });
+    const firstRunCalls = fetchImpl.mock.calls.length;
+    expect(firstRunCalls).toBeGreaterThan(1);
+
+    // A different bbox, so the cache cannot answer it.
+    fetchImpl.mockClear();
+    await fetchOsm(
+      { west: 7.71, south: 45.971, east: 7.712, north: 45.973 },
+      ['roads'],
+      { fetchImpl: fetchImpl as unknown as typeof fetch, backoffMs: 1 },
+    );
+
+    // Straight to the one that worked: one call, not the whole walk again.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe(working);
   });
 });
