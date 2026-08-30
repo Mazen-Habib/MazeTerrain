@@ -141,6 +141,7 @@ export function restoreSettings(raw: unknown): Settings {
   const contours = isObject(raw.contours) ? raw.contours : {};
   const frame = isObject(raw.frame) ? raw.frame : {};
   const profile = isObject(raw.profile) ? raw.profile : {};
+  const tiling = isObject(raw.tiling) ? raw.tiling : {};
   const label = isObject(raw.label) ? raw.label : {};
   const bed = raw.bedSize_mm;
 
@@ -182,6 +183,7 @@ export function restoreSettings(raw: unknown): Settings {
       depth_mm: num(profile.depth_mm, base.profile.depth_mm),
       height_mm: num(profile.height_mm, base.profile.height_mm),
     },
+    tiling: { enabled: bool(tiling.enabled, base.tiling.enabled) },
     label: {
       text: str(label.text, base.label.text),
       capHeight_mm: num(label.capHeight_mm, base.label.capHeight_mm),

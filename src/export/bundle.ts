@@ -26,6 +26,11 @@ function slugPart(name: string): string {
 
 /** Human-readable name for a part, matching what the 3MF export calls it. */
 function label(part: MeshPart): string {
+  // `tile:A1:roads` reads as "Piece A1 — roads", not "Tile:A1:roads".
+  if (part.name.startsWith('tile:')) {
+    const [, piece, layer] = part.name.split(':');
+    return layer ? `Piece ${piece} — ${layer}` : `Piece ${piece}`;
+  }
   if (part.name.startsWith('insert:')) {
     const index = Number(part.name.slice('insert:'.length));
     return Number.isFinite(index) ? `Route insert ${index + 1}` : 'Route insert';
@@ -54,27 +59,71 @@ export interface BundleOptions {
  */
 export function readmeText(parts: MeshPart[], options: BundleOptions): string {
   const bodies = parts.map((p, i) => `  ${i + 1}. ${stlName(p, options.slug)} — ${label(p)}`);
+  const hasInsert = parts.some((p) => p.name.startsWith('insert'));
+  const tiles = [
+    ...new Set(parts.filter((p) => p.name.startsWith('tile:')).map((p) => p.name.split(':')[1])),
+  ].sort();
 
-  return (
-    `${options.slug} — ${Math.round(options.modelWidth_mm)} mm model\n` +
-    `${'='.repeat(40)}\n\n` +
-    `This model prints as ${parts.length} separate ${parts.length === 1 ? 'part' : 'parts'}:\n\n` +
-    `${bodies.join('\n')}\n\n` +
-    `How to print\n` +
-    `------------\n` +
-    `Print each file separately, in whichever filament you want that part to be.\n` +
-    `Every part shares one origin and is already in position, so do NOT move or\n` +
-    `rotate them in the slicer if you want them to fit.\n\n` +
-    `The route insert has a flat underside and sits in the channel cut into the\n` +
-    `terrain. It needs no supports.\n\n` +
-    `Assembly\n` +
-    `--------\n` +
-    `The insert is undersized by ${options.clearance_mm} mm per side, so it should press in\n` +
-    `with light pressure. If it will not seat, increase the clearance and\n` +
-    `re-export rather than forcing it. If it rattles, reduce the clearance.\n` +
-    `A drop of glue in the channel holds it permanently.\n\n` +
-    `${attributionText(options.version)}`
-  );
+  // Each file is placed flat on the bed, so they no longer share one origin in
+  // Z. The note here used to say they did, which stopped being true the day
+  // separately-printed parts started being dropped onto the plate.
+  const printing = [
+    'How to print',
+    '------------',
+    'Print each file separately, in whichever filament you want that part to be.',
+    'Each one is already sitting flat on the bed, so it needs no rotating and no',
+    '"place on face" — but do NOT scale any of them, or nothing will fit.',
+    '',
+  ];
+
+  const tileSection =
+    tiles.length > 0
+      ? [
+          `This model is too big for one bed, so it is cut into ${tiles.length} pieces:`,
+          `${tiles.join(', ')}. The letter is the column from the left and the number`,
+          'is the row from the front, so A1 is the front-left piece.',
+          '',
+          'Joining the pieces',
+          '------------------',
+          'The seams are flat butt joints, cut straight down. There are no alignment',
+          'pins yet: hold each pair square while the glue sets, or dry-fit the whole',
+          'set face down on a flat surface and glue it in one go, which keeps the',
+          'tops level. Model cement or cyanoacrylate both work on PLA.',
+          '',
+        ]
+      : [];
+
+  const insertSection = hasInsert
+    ? [
+        'The route insert has a flat underside and sits in the channel cut into the',
+        'terrain. It needs no supports.',
+        '',
+        'Assembly',
+        '--------',
+        `The insert is undersized by ${options.clearance_mm} mm per side, so it should press in`,
+        'with light pressure. If it will not seat, increase the clearance and',
+        're-export rather than forcing it. If it rattles, reduce the clearance.',
+        'A drop of glue in the channel holds it permanently.',
+        '',
+      ]
+    : [];
+
+  return [
+    `${options.slug} — ${Math.round(options.modelWidth_mm)} mm model`,
+    '='.repeat(40),
+    '',
+    tiles.length > 0
+      ? `This model prints as ${tiles.length} pieces, in ${parts.length} files ` +
+        `(one per colour per piece):`
+      : `This model prints as ${parts.length} separate ${parts.length === 1 ? 'part' : 'parts'}:`,
+    '',
+    ...bodies,
+    '',
+    ...printing,
+    ...tileSection,
+    ...insertSection,
+    attributionText(options.version),
+  ].join('\n');
 }
 
 function stlName(part: MeshPart, slug: string): string {

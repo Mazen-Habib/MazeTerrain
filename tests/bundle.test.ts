@@ -51,8 +51,16 @@ describe('writePartBundle', () => {
     expect(readme).toMatch(/reduce the clearance/i);
   });
 
-  it('warns against moving the parts in the slicer', () => {
-    expect(text('README.txt')).toMatch(/do NOT move or\s*rotate/);
+  /**
+   * The advice changed when separately-printed parts started being dropped onto
+   * the bed: they no longer share one origin in Z, so "do not move them" became
+   * false. What still holds — and is what actually breaks the fit — is scale.
+   */
+  it('warns against scaling the parts, and says they are already bed-ready', () => {
+    const readme = text('README.txt');
+    expect(readme).toMatch(/do NOT scale/);
+    expect(readme).toMatch(/already sitting flat on the bed/);
+    expect(readme).not.toMatch(/shares one origin/);
   });
 
   /** CLAUDE.md: attribution is legally required, not decorative. */
@@ -82,5 +90,58 @@ describe('readmeText', () => {
     expect(readmeText([part('model', 1), part('insert:0', 1)], options)).toContain(
       '2 separate parts',
     );
+  });
+});
+
+/**
+ * The note for a model split across the bed (F12).
+ *
+ * A tiled model is many FILES and fewer PIECES — four pieces of three layers is
+ * twelve files — and the header said "12 separate parts", which reads as twelve
+ * things to glue together.
+ */
+describe('the note for a tiled model', () => {
+  const tile = (piece: string, layer: string): MeshPart => ({
+    name: `tile:${piece}:${layer}`,
+    color: '#888888',
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0]),
+    indices: new Uint32Array([0, 1, 2]),
+    manifold: true,
+  });
+
+  const parts = [
+    tile('A1', 'terrain'),
+    tile('A1', 'roads'),
+    tile('B1', 'terrain'),
+    tile('B1', 'roads'),
+  ];
+  const readme = readmeText(parts, { slug: 'zermatt', modelWidth_mm: 400, clearance_mm: 0.15 });
+
+  it('counts pieces to glue, not files to print', () => {
+    expect(readme).toMatch(/prints as 2 pieces, in 4 files/);
+    expect(readme).not.toMatch(/4 separate parts/);
+  });
+
+  it('names the pieces and says how the grid reads', () => {
+    expect(readme).toMatch(/cut into 2 pieces/);
+    expect(readme).toContain('A1, B1');
+    expect(readme).toMatch(/A1 is the front-left piece/);
+  });
+
+  it('labels each file by its piece and layer', () => {
+    expect(readme).toContain('Piece A1 — terrain');
+    expect(readme).toContain('Piece B1 — roads');
+    expect(readme).not.toContain('Tile:A1');
+  });
+
+  it('is honest that there are no alignment pins yet', () => {
+    expect(readme).toMatch(/flat butt joints/);
+    expect(readme).toMatch(/no alignment\s*pins yet/);
+  });
+
+  /** No insert here, so none of the insert advice should appear. */
+  it('leaves out the insert instructions when there is no insert', () => {
+    expect(readme).not.toMatch(/undersized by/);
+    expect(readme).not.toMatch(/press in/);
   });
 });

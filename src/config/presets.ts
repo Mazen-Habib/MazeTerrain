@@ -105,6 +105,7 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
     contours: { enabled: false, interval_m: 'auto', lineHeight_mm: 0.7 },
     frame: { enabled: false, width_mm: 8, height_mm: 3 },
     profile: { enabled: false, depth_mm: 14, height_mm: 1.2 },
+    tiling: { enabled: false },
     label: { text: '', capHeight_mm: 4, depth_mm: 0.6, strokeWidth_mm: 'auto' },
     cutout: {
       subMode: 'groove',

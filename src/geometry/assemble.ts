@@ -21,6 +21,8 @@ import { buildRouteSolid } from './route';
 import { traceContours, suggestInterval } from './contours';
 import { buildFrame, frameSubmersion } from './frame';
 import { buildProfileStrip } from './profile';
+import { splitForBed } from './tiles';
+import { printUnit } from '../export/layout';
 import { buildBaseline, buildLabelTool, labelCoverage } from './label';
 import { buildRibbonField, FEATURE_CELLS_PER_HALF_WIDTH } from './ribbonField';
 import type { MultiPolygon } from './polygons';
@@ -1275,6 +1277,45 @@ export async function assemble(
     }
   }
 
+  // --- Stage 11: split for the bed (F12) ------------------------------------
+  //
+  // Last, after every other part exists and after any union: tiles are cut out
+  // of the FINISHED model, so a tile is a real slice of what the user saw, not
+  // a slice of an intermediate.
+  if (config.tiling.enabled && config.bedSize_mm) {
+    report({ stage: 'validating', percent: 97, detail: 'Cutting the model to fit your bed' });
+    try {
+      const split = await splitForBed(parts, config.bedSize_mm);
+      if (split) {
+        parts = split.parts;
+        const pieces = split.plan.cols * split.plan.rows - split.emptyCells;
+        warnings.push({
+          level: 'warn',
+          code: 'tiled-for-bed',
+          message:
+            `Split into ${pieces} piece${pieces === 1 ? '' : 's'} ` +
+            `(${split.plan.cols} x ${split.plan.rows} grid, each about ` +
+            `${split.plan.tileWidth_mm.toFixed(0)} x ${split.plan.tileDepth_mm.toFixed(0)} mm) ` +
+            `to fit your ${config.bedSize_mm[0]} x ${config.bedSize_mm[1]} mm bed. ` +
+            `Seams are flat butt joints — glue them; there are no alignment pins yet.`,
+        });
+      }
+      throwIfAborted();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      // The whole model is still perfectly good unsplit, so this warns rather
+      // than failing the build.
+      warnings.push({
+        level: 'warn',
+        code: 'tiling-failed',
+        message:
+          `Could not split the model for your bed: ` +
+          `${err instanceof Error ? err.message : String(err)}. ` +
+          `It was left whole — print it smaller, or split it in your slicer.`,
+      });
+    }
+  }
+
   let triangles = 0;
   let vertices = 0;
   for (const part of parts) {
@@ -1290,7 +1331,9 @@ export async function assemble(
   // and by exactly the amount the user had just dialled in.
   const dimensions_mm = boundsOfParts(parts) ?? mesh.dimensions_mm;
 
-  warnings.push(...printChecks(config, dimensions_mm, triangles));
+  // The bed check asks about the largest PIECE, not the whole model: after a
+  // split the model is deliberately bigger than the bed and each piece is not.
+  warnings.push(...printChecks(config, dimensions_mm, triangles, largestPiece_mm(parts) ?? dimensions_mm));
 
   const bundle: MeshBundle = {
     parts,
@@ -1372,6 +1415,15 @@ export function printChecks(
   config: GenerateConfig,
   dimensions_mm: [number, number, number],
   triangles: number,
+  /**
+   * Size of the largest piece that actually goes on the bed.
+   *
+   * Defaults to the whole model, which is the same thing until it is split.
+   * After tiling it is the biggest tile — otherwise the build says "split into
+   * 4 pieces to fit your bed" and "larger than your bed" in the same breath,
+   * which is how a user learns to stop reading warnings.
+   */
+  piece_mm: [number, number, number] = dimensions_mm,
 ): PrintWarning[] {
   const out: PrintWarning[] = [];
   const [w, d, h] = dimensions_mm;
@@ -1426,18 +1478,22 @@ export function printChecks(
   // and Phase 4 has multi-tile output — so this says by how much and stops.
   if (config.bedSize_mm) {
     const [bedW, bedD] = config.bedSize_mm;
-    // Either orientation counts: a 300 x 100 model fits a 250 x 210 bed turned.
-    const fits =
-      (w <= bedW && d <= bedD) || (w <= bedD && d <= bedW);
+    const [pw, pd] = piece_mm;
+    const split = pw !== w || pd !== d;
+    // Either orientation counts: a 300 x 100 piece fits a 250 x 210 bed turned.
+    const fits = (pw <= bedW && pd <= bedD) || (pw <= bedD && pd <= bedW);
     if (!fits) {
-      const over = Math.max(w - Math.max(bedW, bedD), d - Math.min(bedW, bedD));
+      const over = Math.max(pw - Math.max(bedW, bedD), pd - Math.min(bedW, bedD));
       out.push({
         level: 'warn',
         code: 'over-bed-size',
-        message:
-          `Model is ${w.toFixed(0)} × ${d.toFixed(0)} mm, larger than your ` +
-          `${bedW} × ${bedD} mm bed by about ${Math.max(1, Math.round(over))} mm. ` +
-          `Reduce the model size, or print it in sections.`,
+        message: split
+          ? `Even split, the largest piece is ${pw.toFixed(0)} × ${pd.toFixed(0)} mm, ` +
+            `larger than your ${bedW} × ${bedD} mm bed by about ` +
+            `${Math.max(1, Math.round(over))} mm. Reduce the model size.`
+          : `Model is ${w.toFixed(0)} × ${d.toFixed(0)} mm, larger than your ` +
+            `${bedW} × ${bedD} mm bed by about ${Math.max(1, Math.round(over))} mm. ` +
+            `Reduce the model size, or turn on "Split to fit the bed".`,
       });
     }
   }
@@ -1453,4 +1509,30 @@ export function printChecks(
   }
 
   return out;
+}
+
+
+/**
+ * Footprint of the largest piece that goes on the bed, print mm.
+ *
+ * Pieces, not parts: a tile of a multicolour model is several parts that print
+ * together, so they are measured together. Returns null when there is nothing
+ * to measure.
+ */
+function largestPiece_mm(parts: MeshPart[]): [number, number, number] | null {
+  const units = new Map<string, MeshPart[]>();
+  for (const part of parts) {
+    const unit = printUnit(part);
+    const list = units.get(unit);
+    if (list) list.push(part);
+    else units.set(unit, [part]);
+  }
+
+  let best: [number, number, number] | null = null;
+  for (const members of units.values()) {
+    const box = boundsOfParts(members);
+    if (!box) continue;
+    if (!best || box[0] * box[1] > best[0] * best[1]) best = box;
+  }
+  return best;
 }

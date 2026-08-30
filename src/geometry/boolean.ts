@@ -23,6 +23,7 @@ interface ManifoldMesh {
 interface ManifoldSolid {
   subtract(other: ManifoldSolid): ManifoldSolid;
   add(other: ManifoldSolid): ManifoldSolid;
+  intersect(other: ManifoldSolid): ManifoldSolid;
   getMesh(): ManifoldMesh;
   volume(): number;
   isEmpty(): boolean;
@@ -190,5 +191,34 @@ export async function unionParts(
     return fromSolid(wasm.Manifold.union(solids), options.name, options.color);
   } finally {
     for (const solid of solids) solid.delete();
+  }
+}
+
+/**
+ * The part of `base` inside `boundary` — everything else discarded.
+ *
+ * Used to cut a model into bed-sized tiles: intersecting with a tall box gives
+ * one tile with a clean vertical seam, and doing it per cell gives the set.
+ *
+ * Returns null rather than throwing when nothing survives. A corner cell of a
+ * circular model is legitimately empty, and an empty tile is a fact about the
+ * grid, not an error.
+ */
+export async function intersectPart(
+  base: MeshPart,
+  boundary: MeshPart,
+  options: BooleanResultOptions,
+): Promise<MeshPart | null> {
+  const wasm = await loadBooleans();
+  const baseSolid = toSolid(wasm, base);
+  const boxSolid = toSolid(wasm, boundary);
+
+  try {
+    const result = baseSolid.intersect(boxSolid);
+    if (result.isEmpty()) return null;
+    return fromSolid(result, options.name, options.color);
+  } finally {
+    baseSolid.delete();
+    boxSolid.delete();
   }
 }

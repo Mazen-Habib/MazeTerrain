@@ -90,3 +90,44 @@ describe('printChecks', () => {
     });
   });
 });
+
+/**
+ * The bed check after a split (F12).
+ *
+ * A tiled model is deliberately larger than the bed; each PIECE is not. Saying
+ * both "split into 4 pieces to fit your bed" and "larger than your bed" in the
+ * same build is how a user learns to stop reading warnings.
+ */
+describe('bed check on a split model', () => {
+  const config = testConfig({ bedSize_mm: [256, 256] });
+
+  it('complains about an oversized model that was not split', () => {
+    const warnings = printChecks(config, [400, 400, 30], 1000);
+    const bed = warnings.find((w) => w.code === 'over-bed-size');
+    expect(bed).toBeDefined();
+    expect(bed!.message).toMatch(/Split to fit the bed/);
+  });
+
+  it('says nothing once the pieces fit, however big the model is', () => {
+    const warnings = printChecks(config, [400, 400, 30], 1000, [200, 200, 30]);
+    expect(warnings.find((w) => w.code === 'over-bed-size')).toBeUndefined();
+  });
+
+  /** Splitting is not a promise that it worked — a huge model can still overrun. */
+  it('still complains when even the largest piece is too big', () => {
+    const warnings = printChecks(config, [2000, 2000, 30], 1000, [300, 300, 30]);
+    const bed = warnings.find((w) => w.code === 'over-bed-size');
+    expect(bed).toBeDefined();
+    expect(bed!.message).toMatch(/Even split/);
+    expect(bed!.message).toMatch(/300 × 300/);
+  });
+
+  it('counts a piece that fits the bed turned', () => {
+    const turned = testConfig({ bedSize_mm: [180, 300] });
+    expect(
+      printChecks(turned, [400, 400, 30], 1000, [280, 170, 30]).find(
+        (w) => w.code === 'over-bed-size',
+      ),
+    ).toBeUndefined();
+  });
+});

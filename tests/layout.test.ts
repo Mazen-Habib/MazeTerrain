@@ -97,10 +97,30 @@ describe('layOutForPrint', () => {
     expect(layOutForPrint(parts)).toBe(parts);
   });
 
-  it('reports whether laying out would move anything', () => {
+  it('reports whether the model prints as more than one piece', () => {
     expect(hasSeparateParts([boxPart('model', -50, 50), boxPart('insert:0', -20, 20)])).toBe(true);
     expect(hasSeparateParts([boxPart('terrain', -50, 50)])).toBe(false);
+    // One piece, whatever it is called: nothing to lay out beside anything.
     expect(hasSeparateParts([boxPart('insert:0', -20, 20)])).toBe(false);
+
+    // A multicolour model is many parts and ONE piece.
+    expect(
+      hasSeparateParts([
+        boxPart('terrain', -50, 50),
+        boxPart('roads', -50, 50),
+        boxPart('water', -50, 50),
+      ]),
+    ).toBe(false);
+
+    // A model split for the bed is all tiles and no body — the case that used
+    // to come back false and hide the per-piece export.
+    expect(
+      hasSeparateParts([
+        boxPart('tile:A1:terrain', -50, 0),
+        boxPart('tile:A1:roads', -50, 0),
+        boxPart('tile:B1:terrain', 0, 50),
+      ]),
+    ).toBe(true);
   });
 });
 

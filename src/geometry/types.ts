@@ -176,6 +176,17 @@ export interface ProfileSettings {
   height_mm: number;
 }
 
+/**
+ * Splitting a model too big for the bed (docs/02-feature-spec.md F12).
+ *
+ * Off by default. Cutting a model into pieces is a large, visible change to
+ * what comes out, and the F8 bed warning already tells the user when they might
+ * want it.
+ */
+export interface TilingSettings {
+  enabled: boolean;
+}
+
 export interface FrameSettings {
   enabled: boolean;
   /** Band width, print mm. Narrow reads as an edge lip, wide as a picture frame. */
@@ -248,6 +259,8 @@ export interface GenerateConfig {
   frame: FrameSettings;
   /** docs/02-feature-spec.md F11. */
   profile: ProfileSettings;
+  /** docs/02-feature-spec.md F12. */
+  tiling: TilingSettings;
   /** docs/02-feature-spec.md F5.1. */
   label: LabelSettings;
   /**

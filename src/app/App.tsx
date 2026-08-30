@@ -19,7 +19,7 @@ import { defaultRouteStyle, ROUTE_PALETTE, type Route } from '../data/gpx/types'
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
 import { writeThreeMF, threeMFFilename } from '../export/threemf';
 import { writePartBundle, bundleFilename } from '../export/bundle';
-import { dropSeparateToPlate, layOutForPrint } from '../export/layout';
+import { dropSeparateToPlate, hasSeparateParts, layOutForPrint } from '../export/layout';
 import { bboxCentre, resolveGrid } from '../geometry/coords';
 import {
   fitCircleToRoutes,
@@ -706,7 +706,15 @@ export function App() {
   }, [bundle, blocked, config.modelWidth_mm, config.cutout.clearance_mm, save]);
 
   /** Two bodies that have to be printed apart, so the ZIP is the useful export. */
-  const hasSeparateParts = (bundle?.parts.length ?? 0) > 1;
+  /**
+   * Whether anything prints as its own physical piece.
+   *
+   * Asked of the layout module rather than counted here: "more than one part"
+   * was true of every multicolour model, which are all one piece, and false of
+   * nothing that mattered. A cut-out insert and a bed-split tile are pieces; a
+   * roads layer is not.
+   */
+  const separateParts = bundle ? hasSeparateParts(bundle.parts) : false;
 
   /**
    * 3MF keeps each layer as its own object with its own material, so a slicer
@@ -762,7 +770,7 @@ export function App() {
           >
             {busy ? 'Generating…' : 'Generate'}
           </button>
-          {config.colorMode === 'single-cutout' && hasSeparateParts ? (
+          {separateParts ? (
             <button
               className="btn"
               onClick={onDownloadParts}
@@ -1317,6 +1325,23 @@ export function App() {
               <p className="field__hint">
                 Warns when the model will not fit. Never blocks — printing in sections is a
                 perfectly good plan.
+              </p>
+            </div>
+
+            <div className="field">
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={config.tiling.enabled}
+                  disabled={busy || !config.bedSize_mm}
+                  onChange={(e) => update({ tiling: { enabled: e.target.checked } })}
+                />
+                Split to fit the bed
+              </label>
+              <p className="field__hint">
+                {!config.bedSize_mm
+                  ? 'Pick a printer bed above, and this can cut an oversized model into pieces that fit it.'
+                  : 'Cuts an oversized model into a grid of bed-sized pieces, each exported ready to print. A model that already fits is left alone. Seams are flat butt joints — glue them; there are no alignment pins yet.'}
               </p>
             </div>
           </section>
