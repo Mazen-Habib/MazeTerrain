@@ -86,17 +86,32 @@ const LINE_WIDTH_RATIO = 1.125;
 /**
  * How much longer a print takes than the extrusion arithmetic alone says.
  *
- * Travel moves, acceleration and deceleration on every corner, per-layer
- * overhead, and the fact that the nominal speed is a ceiling the printer only
- * reaches on long straight runs. A terrain model is nearly all short segments,
- * so it spends most of its life accelerating.
+ * Travel moves, wipes, retraction, seams, and the fact that the nominal speed
+ * is a ceiling the printer only reaches on long straight runs. A terrain model
+ * is nearly all short segments, so it spends much of its life accelerating.
  *
- * **This factor is uncalibrated.** It is a plausible constant, not a measured
- * one, and it is the least trustworthy number this module produces — which is
- * why the UI labels the time as rough and the filament mass as firm. Calibrate
- * it against a real slicer's figure for a real model and replace it.
+ * **Calibrated 2026-08-30** against a sliced MazeTerrain model — a 23.13 g
+ * city-and-route disc with the route as a separate insert. Its per-line-type
+ * breakdown:
+ *
+ *     travel        13m21s   19.3%
+ *     wipe           2m26s    3.5%
+ *     seams          2m27s    3.6%
+ *     unretract      1m34s    2.3%
+ *     retract        1m01s    1.5%
+ *     ----------------------------
+ *     non-extruding 20m49s   30.1%   of 69m10s total
+ *
+ * So 1 / (1 − 0.301) = 1.431. The previous value, 1.35, was a guess that
+ * implied 26% and ran the estimate short.
+ *
+ * One model is one data point, and this one is dense with short segments — a
+ * smoother, larger model would travel proportionally less. The time stays
+ * labelled "rough" in the UI for that reason. The mass does not: the same
+ * slicer run put 23.13 g at 7.75 m of 1.75 mm filament, against 7.76 m from
+ * this module's arithmetic.
  */
-const TRAVEL_FACTOR = 1.35;
+const TRAVEL_FACTOR = 1.431;
 
 /** Faces steeper than this count as walls rather than as solid top or bottom. */
 const WALL_COS_LIMIT = Math.cos((50 * Math.PI) / 180);

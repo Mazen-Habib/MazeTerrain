@@ -167,15 +167,32 @@ export function EstimatePanel({
         </select>
       </div>
 
-      <NumberField
-        label="Price per kg"
-        value={settings.pricePerKg}
-        min={0}
-        max={500}
-        step={1}
-        onChange={(v) => onChange({ pricePerKg: v })}
-        hint="In whatever currency you buy filament in — the cost above comes back in the same one."
-      />
+      <div className="field">
+        <label className="field__label" htmlFor="price-per-kg">
+          Price per kg
+        </label>
+        {/*
+          A plain box, not a slider. A price has no sensible ceiling — the same
+          spool is 20 in one currency and 5000 in another — and this shipped
+          with a slider capped at 500, which simply refused the real number.
+        */}
+        <input
+          id="price-per-kg"
+          type="number"
+          className="field__number field__number--wide"
+          min={0}
+          step="any"
+          value={settings.pricePerKg}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (Number.isFinite(v) && v >= 0) onChange({ pricePerKg: v });
+          }}
+        />
+        <p className="field__hint">
+          In whatever currency you buy filament in — the cost above comes back in the same
+          one. No currency is assumed and there is no upper limit.
+        </p>
+      </div>
       <NumberField
         label="Print speed"
         unit="mm/s"

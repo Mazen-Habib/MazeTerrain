@@ -958,3 +958,8 @@ body {
   font-weight: 400;
   color: var(--muted);
 }
+
+/* A price box, unlike a millimetre box, has to hold four or five digits. */
+.field__number--wide {
+  width: 110px;
+}
