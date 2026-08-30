@@ -50,6 +50,7 @@ import { Viewer, type ShadingMode } from '../preview/Viewer';
 import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
+import { EstimatePanel, defaultFilamentSettings, type FilamentSettings } from './EstimatePanel';
 import { LayersPanel } from './LayersPanel';
 import { ProjectPanel } from './ProjectPanel';
 import {
@@ -146,6 +147,13 @@ export function App() {
   const [tool, setTool] = useState<DrawTool | null>(null);
   /** The route whose vertices are being dragged on the map (F1.3), or null. */
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
+  /**
+   * Slicer settings for the filament estimate (F9).
+   *
+   * Deliberately NOT part of GenerateConfig: none of it moves a vertex, so
+   * changing infill must not mark the model dirty or ask for a rebuild.
+   */
+  const [filament, setFilament] = useState<FilamentSettings>(defaultFilamentSettings);
   const [basemapId, setBasemapId] = useState(BASEMAPS[0].id);
   const [terrain3d, setTerrain3d] = useState(false);
   const [view, setView] = useState<'map' | '3d'>('map');
@@ -1046,6 +1054,15 @@ export function App() {
               </select>
               <p className="field__hint">Sets the floor on terrain detail.</p>
             </div>
+
+            <EstimatePanel
+              measures={bundle?.measures ?? null}
+              settings={filament}
+              onChange={(patch) => setFilament((c) => ({ ...c, ...patch }))}
+              layerHeight_mm={config.layerHeight_mm}
+              nozzleDiameter_mm={config.nozzleDiameter_mm}
+              stale={dirty}
+            />
 
             <div className="field">
               <label className="checkbox">

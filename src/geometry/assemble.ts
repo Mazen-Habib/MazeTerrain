@@ -15,6 +15,7 @@ import { buildHeightfield, sampleHeightfieldAt, smoothHeightfield } from './heig
 import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
 import { findFloatingVertices, repairAndValidate, validateMesh } from './validate';
+import { measureParts } from '../export/estimate';
 import { BooleanError, subtractParts, unionParts } from './boolean';
 import { buildRouteSolid } from './route';
 import { traceContours, suggestInterval } from './contours';
@@ -1206,6 +1207,8 @@ export async function assemble(
     warnings,
     validation,
     layers: layerSummaries,
+    // After validation, so the parts measured are the repaired ones.
+    measures: measureParts(parts),
   };
 
   report({ stage: 'done', percent: 100, detail: 'Done' });

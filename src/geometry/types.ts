@@ -74,6 +74,15 @@ export interface MeshBundle {
   validation: ValidationResult;
   /** One entry per line layer that was built. */
   layers: LayerBuildSummary[];
+  /**
+   * Volume and area per part, for the filament estimate (F9).
+   *
+   * Measured here rather than in the UI because it is a pass over every
+   * triangle and the main thread must not block. It depends only on the
+   * geometry, so the printer and material settings can change without a
+   * rebuild — see `src/export/estimate.ts`.
+   */
+  measures: import('../export/estimate').PartMeasure[];
 }
 
 /** docs/05-geometry-pipeline.md, Stage 9. */
