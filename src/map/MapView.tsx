@@ -5,7 +5,7 @@
  * its sources. Re-creating a WebGL map on every render is the standard way to
  * make a map app feel broken.
  */
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import type { MapMouseEvent } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -24,6 +24,7 @@ import {
   type DrawTool,
   type LonLat,
 } from './draw';
+import { deleteVertex, insertVertex, moveVertex, vertexHandles } from './editPath';
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
@@ -41,6 +42,12 @@ interface MapViewProps {
   onShapeChange: (shape: SelectionShape) => void;
   /** A hand-drawn route, finished (docs/02-feature-spec.md F1.3). */
   onRouteDrawn: (points: LonLat[]) => void;
+  /** The route whose vertices are being edited, or null (F1.3). */
+  editingRouteId: string | null;
+  /** A vertex was moved, inserted or deleted. Fires per pointer move while dragging. */
+  onRouteEdited: (id: string, points: LonLat[]) => void;
+  /** Something the map declined to do, in words. */
+  onNotice: (text: string) => void;
   /** Somewhere to fly the view, or null. Set by "My location". */
   flyTo: LonLat | null;
   onToolFinished: () => void;
@@ -59,7 +66,9 @@ type Interaction =
   | { kind: 'drawing'; start: LonLat }
   | { kind: 'points'; points: LonLat[] }
   | { kind: 'moving'; last: LonLat }
-  | { kind: 'resizing' };
+  | { kind: 'resizing' }
+  /** Dragging one vertex of the route being edited. */
+  | { kind: 'vertex'; index: number };
 
 export function MapView({
   basemapId,
@@ -72,6 +81,9 @@ export function MapView({
   featurePreview,
   onShapeChange,
   onRouteDrawn,
+  editingRouteId,
+  onRouteEdited,
+  onNotice,
   flyTo,
   onToolFinished,
   onCursor,
@@ -83,8 +95,38 @@ export function MapView({
   // Interaction and the newest props, read from map event handlers that are
   // registered once and must not close over stale values.
   const interaction = useRef<Interaction>({ kind: 'idle' });
-  const live = useRef({ shape, tool, onShapeChange, onRouteDrawn, onToolFinished, onCursor });
-  live.current = { shape, tool, onShapeChange, onRouteDrawn, onToolFinished, onCursor };
+
+  /** The line being edited, as bare pairs, or null. */
+  const editPoints = useMemo<LonLat[] | null>(() => {
+    if (!editingRouteId) return null;
+    const route = routes.find((r) => r.id === editingRouteId);
+    return route ? route.points.map((p) => [p.lon, p.lat] as LonLat) : null;
+  }, [routes, editingRouteId]);
+
+  const live = useRef({
+    shape,
+    tool,
+    editingRouteId,
+    editPoints,
+    onShapeChange,
+    onRouteDrawn,
+    onRouteEdited,
+    onNotice,
+    onToolFinished,
+    onCursor,
+  });
+  live.current = {
+    shape,
+    tool,
+    editingRouteId,
+    editPoints,
+    onShapeChange,
+    onRouteDrawn,
+    onRouteEdited,
+    onNotice,
+    onToolFinished,
+    onCursor,
+  };
 
   const setData = useCallback((id: string, data: GeoJSON.GeoJSON) => {
     const source = map.current?.getSource(id) as maplibregl.GeoJSONSource | undefined;
@@ -124,6 +166,7 @@ export function MapView({
       ['selection', EMPTY],
       ['draft', EMPTY],
       ['handles', EMPTY],
+      ['vertices', EMPTY],
     ] as const) {
       if (!m.getSource(id)) m.addSource(id, { type: 'geojson', data });
     }
@@ -195,6 +238,40 @@ export function MapView({
           'line-opacity': ['case', ['get', 'visible'], 1, 0.25],
         },
       });
+      // Route vertex editing (F1.3). Midpoints are hollow and smaller than
+      // vertices, so "drag me" and "click to add one here" read differently
+      // without a legend. Both sit above the route line they belong to.
+      m.addLayer({
+        id: 'vertex-midpoints',
+        type: 'circle',
+        source: 'vertices',
+        filter: ['==', ['get', 'role'], 'midpoint'],
+        paint: {
+          'circle-radius': 4,
+          'circle-color': '#ffffff',
+          'circle-opacity': 0.55,
+          'circle-stroke-color': '#1f7a3d',
+          'circle-stroke-width': 1.5,
+        },
+      });
+      m.addLayer({
+        id: 'route-vertices',
+        type: 'circle',
+        source: 'vertices',
+        filter: ['==', ['get', 'role'], 'vertex'],
+        paint: {
+          'circle-radius': ['case', ['==', ['get', 'end'], null], 5.5, 7],
+          'circle-color': [
+            'match',
+            ['coalesce', ['get', 'end'], 'mid'],
+            'start', '#1f7a3d',
+            'finish', '#b02a2a',
+            '#ffffff',
+          ],
+          'circle-stroke-color': '#1f7a3d',
+          'circle-stroke-width': 2,
+        },
+      });
       m.addLayer({
         id: 'selection-handles',
         type: 'circle',
@@ -241,10 +318,26 @@ export function MapView({
 
     const toLonLat = (e: MapMouseEvent): LonLat => [e.lngLat.lng, e.lngLat.lat];
 
+    /** Delete a vertex, or explain why not. Shared by right-click and alt-click. */
+    const removeVertexAt = (id: string, points: LonLat[], index: number) => {
+      const next = deleteVertex(points, index);
+      if (next) {
+        live.current.onRouteEdited(id, next);
+      } else {
+        live.current.onNotice('A route needs at least two points. Delete the route instead.');
+      }
+    };
+
     m.on('mousemove', (e: MapMouseEvent) => {
       live.current.onCursor(toLonLat(e));
 
       const state = interaction.current;
+      if (state.kind === 'idle' && !live.current.tool && live.current.editingRouteId) {
+        const layers = ['route-vertices', 'vertex-midpoints'].filter((l) => m.getLayer(l));
+        const over = m.queryRenderedFeatures(e.point, { layers }).length > 0;
+        m.getCanvas().style.cursor = over ? 'move' : '';
+      }
+
       const { tool: activeTool, shape: current } = live.current;
 
       if (state.kind === 'drawing' && activeTool) {
@@ -259,16 +352,53 @@ export function MapView({
         live.current.onShapeChange(next);
       } else if (state.kind === 'resizing' && current) {
         live.current.onShapeChange(resizeShape(current, toLonLat(e)));
+      } else if (state.kind === 'vertex') {
+        const { editingRouteId: id, editPoints } = live.current;
+        if (id && editPoints) {
+          live.current.onRouteEdited(id, moveVertex(editPoints, state.index, toLonLat(e)));
+        }
       }
     });
 
     m.on('mousedown', (e: MapMouseEvent) => {
+      // Primary button only. A right-click fires mousedown before contextmenu,
+      // and the matching mouseup does not arrive, so grabbing a handle here
+      // left it glued to the pointer — right-click a vertex to delete it and
+      // it followed the cursor around the map instead.
+      if (e.originalEvent.button !== 0) return;
+
       const { tool: activeTool, shape: current } = live.current;
 
       if (activeTool && !isClickTool(activeTool)) {
         interaction.current = { kind: 'drawing', start: toLonLat(e) };
         m.dragPan.disable();
         return;
+      }
+
+      const { editingRouteId: id, editPoints } = live.current;
+      if (!activeTool && id && editPoints) {
+        // Vertex handles are tested BEFORE the selection's, because they are
+        // drawn on top and the one under the cursor is the one meant.
+        const layers = ['route-vertices', 'vertex-midpoints'].filter((l) => m.getLayer(l));
+        const hit = m.queryRenderedFeatures(e.point, { layers })[0];
+        const index = hit?.properties?.['index'];
+
+        if (hit && typeof index === 'number') {
+          // Alt-click deletes, for anyone whose trackpad makes a right-click a
+          // two-step affair. Right-click below does the same thing.
+          if (hit.properties?.['role'] === 'vertex' && e.originalEvent.altKey) {
+            removeVertexAt(id, editPoints, index);
+            return;
+          }
+          if (hit.properties?.['role'] === 'midpoint') {
+            // One gesture inserts the point AND places it: the new vertex takes
+            // the midpoint's index, so the drag that follows is already on it.
+            live.current.onRouteEdited(id, insertVertex(editPoints, index, toLonLat(e)));
+          }
+          interaction.current = { kind: 'vertex', index };
+          m.dragPan.disable();
+          return;
+        }
       }
 
       if (!activeTool && current) {
@@ -296,10 +426,36 @@ export function MapView({
         }
       }
 
+      // A drag ends where the button came up, which is not always where the
+      // last mousemove landed.
+      if (state.kind === 'vertex') {
+        const { editingRouteId: id, editPoints } = live.current;
+        if (id && editPoints) {
+          live.current.onRouteEdited(id, moveVertex(editPoints, state.index, toLonLat(e)));
+        }
+      }
+
       if (state.kind !== 'points') {
         interaction.current = { kind: 'idle' };
         m.dragPan.enable();
       }
+    });
+
+    /**
+     * Right-click a vertex to remove it.
+     *
+     * The gesture every map editor uses, and the only one that does not need a
+     * mode of its own: alt-click does the same for trackpads.
+     */
+    m.on('contextmenu', (e: MapMouseEvent) => {
+      const { editingRouteId: id, editPoints } = live.current;
+      if (!id || !editPoints || live.current.tool) return;
+      const layers = ['route-vertices'].filter((l) => m.getLayer(l));
+      const hit = m.queryRenderedFeatures(e.point, { layers })[0];
+      const index = hit?.properties?.['index'];
+      if (typeof index !== 'number') return;
+      e.preventDefault();
+      removeVertexAt(id, editPoints, index);
     });
 
     // Polygon and route are click-to-add rather than drag.
@@ -461,6 +617,11 @@ export function MapView({
       })),
     });
   }, [routes, setData, basemapId]);
+
+  useEffect(() => {
+    if (!ready.current) return;
+    setData('vertices', editPoints ? vertexHandles(editPoints) : EMPTY);
+  }, [editPoints, setData, basemapId]);
 
   useEffect(() => {
     if (!ready.current) return;

@@ -7,6 +7,7 @@
 import { useRef, useState } from 'react';
 import type { ColorMode, CutoutSubMode } from '../geometry/types';
 import type { Route } from '../data/gpx/types';
+import { canEditVertices } from '../map/editPath';
 import { NumberField } from './NumberField';
 
 interface RoutePanelProps {
@@ -34,9 +35,17 @@ interface RoutePanelProps {
   onSmoothing: (id: string, value: number) => void;
   /** Flip the direction of travel. */
   onReverse: (id: string) => void;
+  /** The route whose vertices the map is editing, or null (F1.3). */
+  editingRouteId: string | null;
+  onEditPoints: (id: string | null) => void;
   onUpdate: (id: string, patch: Partial<Route['style']>) => void;
   onRemove: (id: string) => void;
   onFit: () => void;
+}
+
+/** A route's points as bare pairs, for the editability check. */
+function pointsOf(route: Route): [number, number][] {
+  return route.points.map((p) => [p.lon, p.lat]);
 }
 
 export function RoutePanel({
@@ -51,6 +60,8 @@ export function RoutePanel({
   onDraw,
   onSmoothing,
   onReverse,
+  editingRouteId,
+  onEditPoints,
   onUpdate,
   onRemove,
   onFit,
@@ -123,7 +134,12 @@ export function RoutePanel({
               <li
                 key={route.id}
                 className={`route${selected?.id === route.id ? ' route--selected' : ''}`}
-                onClick={() => setSelectedId(route.id)}
+                onClick={() => {
+                  setSelectedId(route.id);
+                  // Editing follows the list: handles left on a route you are
+                  // no longer looking at is how you drag the wrong line.
+                  if (editingRouteId && editingRouteId !== route.id) onEditPoints(null);
+                }}
               >
                 <span
                   className="route__swatch"
@@ -245,6 +261,27 @@ export function RoutePanel({
                   onChange={(v) => onUpdate(selected.id, { height_mm: v })}
                 />
               )}
+
+              {selected.source === 'drawn' && canEditVertices(pointsOf(selected)) ? (
+                <>
+                  <button
+                    type="button"
+                    className={`btn btn--wide${editingRouteId === selected.id ? ' btn--accent' : ''}`}
+                    disabled={busy}
+                    onClick={() =>
+                      onEditPoints(editingRouteId === selected.id ? null : selected.id)
+                    }
+                  >
+                    {editingRouteId === selected.id ? 'Done editing points' : 'Edit points'}
+                  </button>
+                  {editingRouteId === selected.id ? (
+                    <p className="note">
+                      Drag a point to move it. Click a hollow point between two others to add
+                      one. Right-click (or Alt-click) a point to delete it.
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
 
               {selected.source === 'drawn' ? (
                 <NumberField

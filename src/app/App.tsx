@@ -144,6 +144,8 @@ export function App() {
     SHARED ? SHARED.areaLabel : PRESETS[0].label,
   );
   const [tool, setTool] = useState<DrawTool | null>(null);
+  /** The route whose vertices are being dragged on the map (F1.3), or null. */
+  const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [basemapId, setBasemapId] = useState(BASEMAPS[0].id);
   const [terrain3d, setTerrain3d] = useState(false);
   const [view, setView] = useState<'map' | '3d'>('map');
@@ -331,6 +333,37 @@ export function App() {
     );
   }, []);
 
+  /**
+   * A vertex was dragged, inserted or deleted on the map (F1.3).
+   *
+   * Distance and bbox are derived from the points, so they are recomputed here
+   * rather than left stale — the route list shows the distance, and a wrong one
+   * after a drag is worse than none. Elevation is not: a drawn route drapes on
+   * the DEM and carries no recorded gain either way.
+   */
+  const onRouteEdited = useCallback((id: string, points: LonLat[]) => {
+    if (points.length < 2) return;
+    const next = points.map(([lon, lat]) => ({ lon, lat }));
+    setRoutes((current) =>
+      current.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              points: next,
+              distance_m: routeDistance(next),
+              bbox: {
+                west: Math.min(...points.map((p) => p[0])),
+                east: Math.max(...points.map((p) => p[0])),
+                south: Math.min(...points.map((p) => p[1])),
+                north: Math.max(...points.map((p) => p[1])),
+              },
+            }
+          : r,
+      ),
+    );
+    setDirty(true);
+  }, []);
+
   const onSmoothing = useCallback((id: string, value: number) => {
     setRoutes((current) =>
       current.map((r) => (r.id === id ? { ...r, smoothing: Math.max(0, Math.min(1, value)) } : r)),
@@ -400,6 +433,7 @@ export function App() {
 
   const removeRoute = useCallback((id: string) => {
     setRoutes((c) => c.filter((r) => r.id !== id));
+    setEditingRouteId((current) => (current === id ? null : current));
     setDirty(true);
   }, []);
 
@@ -739,9 +773,14 @@ export function App() {
             routes={routes}
             busy={busy}
             drawing={tool === 'route'}
-            onDraw={() => setTool(tool === 'route' ? null : 'route')}
+            onDraw={() => {
+              setEditingRouteId(null);
+              setTool(tool === 'route' ? null : 'route');
+            }}
             onSmoothing={onSmoothing}
             onReverse={onReverse}
+            editingRouteId={editingRouteId}
+            onEditPoints={setEditingRouteId}
             onUpload={onUpload}
             onUpdate={updateRoute}
             onRemove={removeRoute}
@@ -1326,6 +1365,9 @@ export function App() {
               featurePreview={preview?.geojson ?? null}
               onShapeChange={(next) => applyShape(next, 'Custom selection')}
               onRouteDrawn={onRouteDrawn}
+              editingRouteId={tool ? null : editingRouteId}
+              onRouteEdited={onRouteEdited}
+              onNotice={(text) => setError({ level: 'notice', text })}
               flyTo={flyTo}
               onToolFinished={() => setTool(null)}
               onCursor={setCursor}
@@ -1337,7 +1379,10 @@ export function App() {
                 <button
                   key={t.id}
                   className={`shapetool${tool === t.id ? ' shapetool--on' : ''}`}
-                  onClick={() => setTool(tool === t.id ? null : t.id)}
+                  onClick={() => {
+                    setEditingRouteId(null);
+                    setTool(tool === t.id ? null : t.id);
+                  }}
                   title={t.id === 'polygon' ? 'Click points, double-click to finish' : undefined}
                 >
                   <span aria-hidden>{t.glyph}</span> {t.label}
