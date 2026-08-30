@@ -19,7 +19,7 @@ import { defaultRouteStyle, ROUTE_PALETTE, type Route } from '../data/gpx/types'
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
 import { writeThreeMF, threeMFFilename } from '../export/threemf';
 import { writePartBundle, bundleFilename } from '../export/bundle';
-import { layOutForPrint } from '../export/layout';
+import { dropSeparateToPlate, layOutForPrint } from '../export/layout';
 import { bboxCentre, resolveGrid } from '../geometry/coords';
 import {
   fitCircleToRoutes,
@@ -693,7 +693,9 @@ export function App() {
   const onDownloadParts = useCallback(() => {
     if (!bundle || blocked) return;
     save(
-      writePartBundle(bundle.parts, {
+      // Each part is its own file here, so no sideways move — but the insert
+      // still has to come down onto the bed, or it loads floating.
+      writePartBundle(dropSeparateToPlate(bundle.parts), {
         slug: builtSlug.current,
         modelWidth_mm: config.modelWidth_mm,
         clearance_mm: config.cutout.clearance_mm,
