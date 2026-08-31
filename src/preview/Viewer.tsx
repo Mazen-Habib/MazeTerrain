@@ -12,6 +12,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { MeshBundle } from '../geometry/types';
 
+import { TERRAIN_BANDS } from '../geometry/palette';
+
 export type ShadingMode = 'natural' | 'elevation' | 'slope' | 'wireframe';
 
 interface ViewerProps {
@@ -88,6 +90,36 @@ function terrainRamp(t: number, out: THREE.Color): THREE.Color {
     }
   }
   return out.setRGB(1, 1, 1);
+}
+
+/**
+ * Paint a mesh from its per-triangle band indices.
+ *
+ * The geometry is de-indexed first. A vertex is shared by triangles on both
+ * sides of a band boundary and can only carry one colour, so an indexed mesh
+ * blurs every boundary into a gradient — which is the smooth ramp this feature
+ * deliberately is not. Un-indexing costs vertices and buys a crisp snowline.
+ */
+function applyBandColours(geometry: THREE.BufferGeometry, bands: Uint8Array): void {
+  const flat = geometry.index ? geometry.toNonIndexed() : geometry;
+  const count = flat.getAttribute('position').count;
+  const colours = new Float32Array(count * 3);
+  const colour = new THREE.Color();
+
+  for (let t = 0; t < count / 3; t++) {
+    colour.set(TERRAIN_BANDS[bands[t] ?? 0]?.color ?? '#888888');
+    for (let k = 0; k < 3; k++) {
+      const v = t * 3 + k;
+      colours[v * 3] = colour.r;
+      colours[v * 3 + 1] = colour.g;
+      colours[v * 3 + 2] = colour.b;
+    }
+  }
+
+  flat.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  if (flat !== geometry) {
+    geometry.copy(flat);
+  }
 }
 
 function buildColours(
@@ -264,12 +296,26 @@ export function Viewer({ bundle, shading, autoSpin }: ViewerProps) {
       if (shading === 'wireframe') {
         material = new THREE.MeshBasicMaterial({ color: part.color, wireframe: true });
       } else if (shading === 'natural') {
-        material = new THREE.MeshStandardMaterial({
-          color: part.color,
-          roughness: 0.92,
-          metalness: 0,
-          flatShading,
-        });
+        // A part carrying hypsometric bands is painted with them (F3.3). This
+        // is the same band data the 3MF exports, so what the user sees here is
+        // what a colour printer would make — the reason bands are discrete
+        // rather than a smooth ramp.
+        if (part.bands) {
+          applyBandColours(geometry, part.bands);
+          material = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 0.92,
+            metalness: 0,
+            flatShading,
+          });
+        } else {
+          material = new THREE.MeshStandardMaterial({
+            color: part.color,
+            roughness: 0.92,
+            metalness: 0,
+            flatShading,
+          });
+        }
       } else {
         buildColours(geometry, shading, minZ, maxZ);
         material = new THREE.MeshStandardMaterial({

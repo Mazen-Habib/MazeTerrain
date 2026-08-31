@@ -13,6 +13,7 @@
  * (docs/06-export-formats.md, "Critical details").
  */
 import { zipSync, type Zippable } from 'fflate';
+import { TERRAIN_BANDS } from '../geometry/palette';
 import type { MeshPart } from '../geometry/types';
 
 const CORE_NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
@@ -107,8 +108,15 @@ class XmlSink {
   }
 }
 
-/** Vertices and triangles for one part, as XML chunks. */
-function meshChunks(part: MeshPart, chunks: XmlSink): void {
+/**
+ * Vertices and triangles for one part, as XML chunks.
+ *
+ * @param bandBase index of the first hypsometric material in the base-materials
+ *   list, or null when this part carries no bands. A banded part writes `pid`
+ *   and `p1` on every triangle; the object's own `pindex` is then just a
+ *   fallback for a reader that ignores per-triangle properties.
+ */
+function meshChunks(part: MeshPart, chunks: XmlSink, bandBase: number | null): void {
   const { positions, indices } = part;
 
   chunks.push('   <mesh>\n    <vertices>\n');
@@ -128,8 +136,14 @@ function meshChunks(part: MeshPart, chunks: XmlSink): void {
 
   chunks.push('    </vertices>\n    <triangles>\n');
   buffer = '';
+  const bands = bandBase !== null ? part.bands : undefined;
   for (let i = 0; i < indices.length; i += 3) {
-    buffer += `     <triangle v1="${indices[i]}" v2="${indices[i + 1]}" v3="${indices[i + 2]}"/>\n`;
+    const face = `v1="${indices[i]}" v2="${indices[i + 1]}" v3="${indices[i + 2]}"`;
+    // `pid` + `p1` per triangle is how 3MF says "this face is that material",
+    // which is what puts a snowline on a model without splitting the mesh.
+    buffer += bands
+      ? `     <triangle ${face} pid="${MATERIALS_ID}" p1="${(bandBase ?? 0) + (bands[i / 3] ?? 0)}"/>\n`
+      : `     <triangle ${face}/>\n`;
     if (buffer.length > 65536) {
       chunks.push(buffer);
       buffer = '';
@@ -163,12 +177,27 @@ export function buildModelXml(parts: MeshPart[], options: ThreeMFOptions = {}): 
       ' <resources>\n',
   );
 
+  // One material per part, then — when anything is banded — one per hypsometric
+  // band appended AFTER them. Appended rather than interleaved so a part's own
+  // material index stays equal to its position in `parts`, which the object's
+  // `pindex` below depends on.
+  const banded = parts.some((part) => part.bands && part.bands.length > 0);
+  const bandBase = banded ? parts.length : null;
+
   chunks.push(`  <m:basematerials id="${MATERIALS_ID}">\n`);
   for (const part of parts) {
     chunks.push(
       `   <m:base name="${escapeXml(materialName(part))}" ` +
         `displaycolor="${displayColor(part.color)}"/>\n`,
     );
+  }
+  if (banded) {
+    for (const band of TERRAIN_BANDS) {
+      chunks.push(
+        `   <m:base name="${escapeXml(band.name)}" ` +
+          `displaycolor="${displayColor(band.color)}"/>\n`,
+      );
+    }
   }
   chunks.push('  </m:basematerials>\n');
 
@@ -179,7 +208,7 @@ export function buildModelXml(parts: MeshPart[], options: ThreeMFOptions = {}): 
       `  <object id="${objectId}" type="model" name="${escapeXml(materialName(part))}" ` +
         `pid="${MATERIALS_ID}" pindex="${index}">\n`,
     );
-    meshChunks(part, chunks);
+    meshChunks(part, chunks, part.bands && part.bands.length > 0 ? bandBase : null);
     chunks.push('  </object>\n');
   });
 

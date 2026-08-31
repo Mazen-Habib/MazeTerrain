@@ -27,6 +27,7 @@ import {
 import { buildFrame, frameSubmersion } from './frame';
 import { buildProfileStrip } from './profile';
 import { splitForBed } from './tiles';
+import { SINGLE_COLOR, bandTriangles, zRangeOf } from './palette';
 import { buildWaterCut } from './waterCut';
 import { printUnit } from '../export/layout';
 import { buildBaseline, buildLabelTool, labelCoverage } from './label';
@@ -56,7 +57,8 @@ import type {
   ProgressCallback,
 } from './types';
 
-const TERRAIN_COLOR = '#A0907A';
+// A single-colour model prints green now, not beige. See palette.ts.
+const TERRAIN_COLOR = SINGLE_COLOR;
 
 /** Progress budget per stage, in percent. Monotonic, derived from real work. */
 const DEM_START = 5;
@@ -1417,12 +1419,30 @@ export async function assemble(
     });
   }
 
+  /**
+   * Hypsometric bands on the terrain (F3.3).
+   *
+   * Only in multicolour. The single-colour modes union everything into one body
+   * that prints in one filament, and painting bands onto it would promise a
+   * colour change the print cannot make.
+   *
+   * Measured from the terrain's own Z range rather than the model's: a frame, a
+   * raised route and a proud insert all stand above the ground, and letting them
+   * set the top of the scale would push the snowline down into the hills.
+   */
+  const terrainZ = zRangeOf(repaired.positions);
+  const terrainBands =
+    config.colorMode === 'multicolor' && terrainZ
+      ? bandTriangles(repaired.positions, repaired.indices, terrainZ[0], terrainZ[1])
+      : null;
+
   const terrainPart: MeshPart = {
     name: 'terrain',
     color: TERRAIN_COLOR,
     positions: repaired.positions,
     indices: repaired.indices,
     manifold: validation.manifold,
+    ...(terrainBands ? { bands: terrainBands } : {}),
   };
 
   let parts = [

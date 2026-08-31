@@ -18,6 +18,14 @@ export interface MeshPart {
   /** Computed on demand if absent. */
   normals?: Float32Array;
   manifold: boolean;
+  /**
+   * Hypsometric band index per triangle (F3.3), or absent for a plain part.
+   *
+   * One byte per triangle, indexing `TERRAIN_BANDS`. Carried on the part rather
+   * than recomputed by each consumer so the preview and the 3MF cannot disagree
+   * about where the snowline is.
+   */
+  bands?: Uint8Array;
 }
 
 export interface MeshStats {

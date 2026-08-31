@@ -15,6 +15,7 @@ import {
   threeMFFilename,
   writeThreeMF,
 } from '../src/export/threemf';
+import { TERRAIN_BANDS } from '../src/geometry/palette';
 import type { MeshPart } from '../src/geometry/types';
 
 /** A unit tetrahedron — four vertices, four faces, closed. */
@@ -197,5 +198,70 @@ describe('attributionText', () => {
     expect(text).toMatch(/OpenStreetMap/);
     expect(text).toMatch(/ODbL/);
     expect(text).toMatch(/Copernicus/);
+  });
+});
+
+/**
+ * Hypsometric bands in the 3MF (F3.3).
+ *
+ * Reported as "the model generated looks very plain", with the follow-on that a
+ * colour printer should be able to make it properly. Colouring the preview
+ * alone would have been theatre — the point is that the exported file carries
+ * the bands to a slicer.
+ */
+describe('banded terrain', () => {
+  const banded = (): MeshPart => ({
+    name: 'terrain',
+    color: '#5E8C4A',
+    // Four triangles, one per band index used below.
+    positions: new Float32Array([
+      0, 0, 0, 1, 0, 0, 0, 1, 0,
+      0, 0, 1, 1, 0, 1, 0, 1, 1,
+      0, 0, 2, 1, 0, 2, 0, 1, 2,
+      0, 0, 3, 1, 0, 3, 0, 1, 3,
+    ]),
+    indices: new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    manifold: true,
+    bands: new Uint8Array([0, 1, 2, 4]),
+  });
+
+  const xml = (parts: MeshPart[]) => new TextDecoder().decode(buildModelXml(parts));
+
+  it('adds one material per band, after the per-part ones', () => {
+    const text = xml([banded()]);
+    for (const band of TERRAIN_BANDS) {
+      expect(text).toContain(`name="${band.name}"`);
+      expect(text).toContain(displayColor(band.color));
+    }
+  });
+
+  /**
+   * The band materials go AFTER the part materials, so a part's own index still
+   * equals its position in the array — which is what the object's `pindex`
+   * uses. Interleaving them would silently repaint every layer.
+   */
+  it('leaves each part’s own material index alone', () => {
+    const text = xml([banded(), part('roads', '#333333')]);
+    expect(text).toMatch(/<object id="2"[^>]*pindex="0"/);
+    expect(text).toMatch(/<object id="3"[^>]*pindex="1"/);
+  });
+
+  /** pid + p1 per triangle is what actually paints the face. */
+  it('assigns each triangle its own band material', () => {
+    const text = xml([banded()]);
+    // One part, so band materials start at index 1.
+    expect(text).toMatch(/<triangle v1="0" v2="1" v3="2" pid="1" p1="1"\/>/);
+    expect(text).toMatch(/<triangle v1="3" v2="4" v3="5" pid="1" p1="2"\/>/);
+    expect(text).toMatch(/<triangle v1="9" v2="10" v3="11" pid="1" p1="5"\/>/);
+  });
+
+  it('leaves an unbanded model exactly as it was', () => {
+    const text = xml([part('roads', '#333333')]);
+    // The helper winds its first face 0,2,1 — plain, with no property on it.
+    expect(text).toMatch(/<triangle v1="0" v2="2" v3="1"\/>/);
+    expect(text).not.toContain('p1=');
+    for (const band of TERRAIN_BANDS) {
+      expect(text).not.toContain(`name="${band.name}"`);
+    }
   });
 });
