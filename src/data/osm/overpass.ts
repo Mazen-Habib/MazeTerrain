@@ -229,9 +229,20 @@ export function tileBBox(bbox: BBox, tileDeg: number = TILE_DEG): BBox[] {
 }
 
 /** Cache key: the fetch inputs only, never print parameters. */
+/**
+ * Cache generation. Bump to abandon every entry written before it.
+ *
+ * v2, 2026-08-30: v1 entries may hold empty results served by a regional
+ * mirror that answered HTTP 200 for areas it has no data for. Those are
+ * indistinguishable from a genuine empty answer once stored, and they would
+ * have gone on reporting "no roads in this area" for a week after the mirror
+ * was removed. A key change is the only way to disown them.
+ */
+const CACHE_VERSION = 'v2';
+
 export function extractKey(bbox: BBox, layers: LayerId[]): string {
   const box = [bbox.west, bbox.south, bbox.east, bbox.north].map((v) => v.toFixed(5)).join(',');
-  return `osm:${box}:${[...layers].sort().join('+')}`;
+  return `osm:${CACHE_VERSION}:${box}:${[...layers].sort().join('+')}`;
 }
 
 interface CachedExtract {
@@ -247,7 +258,21 @@ async function readCache(key: string): Promise<OverpassResponse | null> {
   return row.data;
 }
 
+/**
+ * Cache a result — unless it is empty.
+ *
+ * An empty response is the one answer that must not be trusted for a week. It
+ * is what a regional mirror returns for the wrong continent, what a partial
+ * outage returns, and what a malformed query returns; it is also, occasionally,
+ * the truth about a patch of desert. Those are indistinguishable once stored,
+ * and re-asking is cheap next to being confidently wrong until the TTL expires.
+ */
+export function isCacheable(data: OverpassResponse): boolean {
+  return data.elements.length > 0;
+}
+
 async function writeCache(key: string, data: OverpassResponse): Promise<void> {
+  if (!isCacheable(data)) return;
   await idbPut(OSM_STORE, { key, data, storedAt: Date.now() } satisfies CachedExtract);
 }
 

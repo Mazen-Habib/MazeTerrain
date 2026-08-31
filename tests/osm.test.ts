@@ -14,6 +14,7 @@ import {
   extractKey,
   fetchOsm,
   mergeResponses,
+  isCacheable,
   OverpassError,
   OVERPASS_ENDPOINTS,
   tileBBox,
@@ -709,5 +710,41 @@ describe('only planet-wide instances are configured', () => {
 
     expect(seen).toHaveLength(1);
     expect(OVERPASS_ENDPOINTS.map((e) => new URL(e).hostname)).toContain(seen[0]);
+  });
+});
+
+/**
+ * An empty answer must never be cached (docs/08-pitfalls.md).
+ *
+ * The Swiss mirror answered HTTP 200 with zero elements for anywhere outside
+ * Switzerland, and every one of those got written to a 7-day cache. Removing
+ * the mirror did not help on its own: the browser would go on serving "no roads
+ * in this area" from its own store for a week.
+ *
+ * The cache itself is inert here — there is no IndexedDB in this environment,
+ * so a test that fetched twice and counted calls would pass whatever the code
+ * did. The DECISION is what is worth testing, so it is a named function.
+ */
+describe('caching', () => {
+  const box = { west: 7.73, south: 45.977, east: 7.732, north: 45.979 };
+
+  it('refuses to store an empty result', () => {
+    expect(isCacheable({ elements: [] })).toBe(false);
+  });
+
+  it('stores a result that has something in it', () => {
+    expect(isCacheable({ elements: [{ type: 'way', id: 7 }] })).toBe(true);
+  });
+
+  /** A key change is the only way to disown entries already written. */
+  it('versions the cache key, so poisoned entries can be abandoned', () => {
+    expect(extractKey(box, ['roads'])).toMatch(/^osm:v\d+:/);
+  });
+
+  it('still keys on the area and the layers', () => {
+    expect(extractKey(box, ['roads'])).not.toBe(extractKey(box, ['water']));
+    expect(extractKey(box, ['roads'])).not.toBe(
+      extractKey({ ...box, north: 46 }, ['roads']),
+    );
   });
 });
