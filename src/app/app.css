@@ -963,3 +963,137 @@ body {
 .field__number--wide {
   width: 110px;
 }
+
+/* Sun position dial (F3.2). Sits at the very top of the sidebar, above the
+   tabs, because it applies to the map whatever tab is showing. */
+.sun {
+  padding: 0 0 14px;
+  margin: 0 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sun__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sun__title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sun__toggle {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sun__dialWrap {
+  display: flex;
+  justify-content: center;
+}
+
+/* Off, the dial is inert and says so — but stays visible, so the control does
+   not vanish out from under someone who just switched terrain off. */
+.sun__dialWrap--off {
+  opacity: 0.4;
+  pointer-events: none;
+  filter: saturate(0.3);
+}
+
+.sun__dial {
+  width: 100%;
+  max-width: 190px;
+  height: auto;
+  cursor: grab;
+  touch-action: none;
+  border-radius: 50%;
+  outline-offset: 3px;
+}
+
+.sun__dial:active {
+  cursor: grabbing;
+}
+
+.sun__ring,
+.sun__rim,
+.sun__cross {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.sun__rim {
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-dasharray: none;
+}
+
+.sun__cardinal {
+  fill: rgba(255, 255, 255, 0.65);
+  font-size: 13px;
+  font-weight: 600;
+  text-anchor: middle;
+}
+
+.sun__cardinal--n {
+  fill: var(--accent);
+}
+
+.sun__centre {
+  fill: rgba(255, 255, 255, 0.5);
+}
+
+.sun__halo {
+  fill: #ffb347;
+  opacity: 0.25;
+}
+
+.sun__disc {
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1.5;
+}
+
+.sun__readout {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.sun__readout > div {
+  flex: 1;
+  text-align: center;
+}
+
+.sun__readout dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.sun__readout dt {
+  margin-top: 2px;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sun__hint {
+  margin-left: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+}

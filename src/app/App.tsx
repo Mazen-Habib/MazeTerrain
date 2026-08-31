@@ -51,6 +51,7 @@ import { Viewer, type ShadingMode } from '../preview/Viewer';
 import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
+import { SunControl, DEFAULT_SUN, type SunPosition } from './SunControl';
 import { EstimatePanel, defaultFilamentSettings, type FilamentSettings } from './EstimatePanel';
 import { LayersPanel } from './LayersPanel';
 import { ProjectPanel } from './ProjectPanel';
@@ -178,7 +179,16 @@ export function App() {
    */
   const [filament, setFilament] = useState<FilamentSettings>(defaultFilamentSettings);
   const [basemapId, setBasemapId] = useState(BASEMAPS[0].id);
-  const [terrain3d, setTerrain3d] = useState(false);
+  /**
+   * Live terrain on by default (F3.2).
+   *
+   * It used to be off, which meant the map opened as a flat street plan and the
+   * relief the whole app is about was one checkbox away and easy to miss. The
+   * sun dial below has nothing to light without it, so the two ship together.
+   */
+  const [terrain3d, setTerrain3d] = useState(true);
+  /** Where the light comes from on the live terrain (F3.2). Lighting only. */
+  const [sun, setSun] = useState<SunPosition>(DEFAULT_SUN);
   const [view, setView] = useState<'map' | '3d'>('map');
   const [shading, setShading] = useState<ShadingMode>('natural');
   const [autoSpin, setAutoSpin] = useState(false);
@@ -796,6 +806,12 @@ export function App() {
 
       <div className="body">
         <aside className="panel">
+          <SunControl
+            sun={sun}
+            onChange={setSun}
+            enabled={terrain3d}
+            onEnabledChange={setTerrain3d}
+          />
           <RoutePanel
             colorMode={config.colorMode}
             cutoutSubMode={config.cutout.subMode}
@@ -1512,6 +1528,7 @@ export function App() {
               fitNonce={fitNonce}
               datasetId={config.dataset}
               terrain3d={terrain3d}
+              sun={sun}
               shape={shape}
               tool={tool}
               routes={routes}

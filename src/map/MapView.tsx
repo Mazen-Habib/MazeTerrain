@@ -34,6 +34,8 @@ interface MapViewProps {
   fitNonce: number;
   datasetId: string;
   terrain3d: boolean;
+  /** Where the light comes from on the live terrain (F3.2). Lighting only. */
+  sun: { azimuth_deg: number; altitude_deg: number };
   shape: SelectionShape | null;
   tool: DrawTool | null;
   routes: Route[];
@@ -61,6 +63,24 @@ function samePlace(m: maplibregl.Map, a: LonLat, b: LonLat): boolean {
   return Math.hypot(pa.x - pb.x, pa.y - pb.y) < 4;
 }
 
+/**
+ * Switch the live 3D terrain on or off.
+ *
+ * Shared by the style-load handler and the prop effect, because both have to do
+ * it and doing it in only one of them is how the map ends up flat with the
+ * checkbox ticked.
+ */
+function applyTerrain(m: maplibregl.Map, on: boolean): void {
+  if (on) {
+    m.setTerrain({ source: 'dem', exaggeration: 1.4 });
+    // Only tilt if the user has not already: a pitch they chose is theirs.
+    if (m.getPitch() < 20) m.easeTo({ pitch: 55, duration: 600 });
+  } else {
+    m.setTerrain(null);
+    m.easeTo({ pitch: 0, duration: 600 });
+  }
+}
+
 type Interaction =
   | { kind: 'idle' }
   | { kind: 'drawing'; start: LonLat }
@@ -75,6 +95,7 @@ export function MapView({
   fitNonce,
   datasetId,
   terrain3d,
+  sun,
   shape,
   tool,
   routes,
@@ -106,6 +127,8 @@ export function MapView({
   const live = useRef({
     shape,
     tool,
+    sun,
+    terrain3d,
     editingRouteId,
     editPoints,
     onShapeChange,
@@ -118,6 +141,8 @@ export function MapView({
   live.current = {
     shape,
     tool,
+    sun,
+    terrain3d,
     editingRouteId,
     editPoints,
     onShapeChange,
@@ -154,7 +179,16 @@ export function MapView({
           id: 'hillshade',
           type: 'hillshade',
           source: 'dem',
-          paint: { 'hillshade-exaggeration': 0.3 },
+          paint: {
+            'hillshade-exaggeration': 0.3,
+            // Anchored to the MAP, not the viewport. The default is 'viewport',
+            // which swings the light round as the user rotates — so a sun set
+            // to the north-west is only north-west until the map turns, and the
+            // shadows stop meaning anything about the ground.
+            'hillshade-illumination-anchor': 'map',
+            'hillshade-illumination-direction': live.current.sun.azimuth_deg,
+            'hillshade-illumination-altitude': live.current.sun.altitude_deg,
+          },
         },
         firstLineLayer,
       );
@@ -286,6 +320,16 @@ export function MapView({
     }
 
     ready.current = true;
+
+    // Apply the terrain state now the style is up.
+    //
+    // The effect below cannot do it on first load: it is gated on
+    // `ready.current`, which only becomes true here, and its dependencies do
+    // not change afterwards. That was invisible while live terrain defaulted to
+    // OFF — the user always toggled it after load, so the effect fired when the
+    // map was ready. Turning the default on exposed it: the checkbox said live
+    // terrain, `getTerrain()` said null, and the map stayed flat.
+    applyTerrain(m, live.current.terrain3d);
   }, [datasetId]);
 
   // --- create the map once --------------------------------------------------
@@ -569,16 +613,23 @@ export function MapView({
     m.setStyle(style.styleUrl);
   }, [basemapId]);
 
+  /**
+   * Move the light.
+   *
+   * Cheap enough to do on every pointer move of the dial: a hillshade paint
+   * property is a uniform, so this is a repaint rather than a re-tile.
+   */
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready.current || !m.getLayer('hillshade')) return;
+    m.setPaintProperty('hillshade', 'hillshade-illumination-direction', sun.azimuth_deg);
+    m.setPaintProperty('hillshade', 'hillshade-illumination-altitude', sun.altitude_deg);
+  }, [sun, basemapId]);
+
   useEffect(() => {
     const m = map.current;
     if (!m || !ready.current) return;
-    if (terrain3d) {
-      m.setTerrain({ source: 'dem', exaggeration: 1.4 });
-      if (m.getPitch() < 20) m.easeTo({ pitch: 55, duration: 600 });
-    } else {
-      m.setTerrain(null);
-      m.easeTo({ pitch: 0, duration: 600 });
-    }
+    applyTerrain(m, terrain3d);
   }, [terrain3d, basemapId]);
 
   useEffect(() => {
