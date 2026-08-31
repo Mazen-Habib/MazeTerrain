@@ -468,6 +468,20 @@ export async function assemble(
         ...(signal ? { signal } : {}),
         onAttempt: (detail) => report({ stage: 'fetching-osm', percent: TERRAIN_END, detail }),
         onEndpoint: (hostname) => servers.add(hostname),
+        onPartial: ({ fetched, total, stoppedEarly }) =>
+          warnings.push({
+            level: 'warn',
+            code: 'osm-partial',
+            message: stoppedEarly
+              ? `OpenStreetMap stopped answering after ${fetched} of ${total} areas, so the ` +
+                `rest were not attempted — continuing would only deepen the block. What did ` +
+                `load is in this model and is cached: wait a few minutes and press Generate ` +
+                `again to fill in the rest, or use a smaller selection, which needs far ` +
+                `fewer requests.`
+              : `${total - fetched} of ${total} areas did not load, so parts of the map may ` +
+                `be missing features. What did load is cached — press Generate again to ` +
+                `retry just the gaps.`,
+          }),
       });
       throwIfAborted();
 

@@ -101,16 +101,34 @@ const MAX_SINGLE_QUERY_KM2 = 100;
 const TILE_DEG = 0.08;
 
 /**
- * Sub-queries in flight at once, and the pause between them.
+ * The pause between sub-queries.
  *
- * One at a time, with a gap. docs/04-data-sources.md: Overpass admins block
+ * They are issued one at a time, in a plain loop, with this gap between them. docs/04-data-sources.md: Overpass admins block
  * high-volume anonymous clients, and this client proved it — two concurrent
  * streams of small tiles earned a connect-refusal from overpass-api.de after
  * roughly 45 requests, which then persisted. Sequential-with-a-gap is slower
  * per selection and is the difference between working and being blocked.
  */
-const TILE_CONCURRENCY = 1;
 const TILE_GAP_MS = 1500;
+
+/**
+ * Consecutive tile failures before the whole fetch gives up.
+ *
+ * Measured 2026-08-30, and this app did it to itself: `overpass-api.de` was
+ * answering single queries fine, a 64-tile build ran, and afterwards it refused
+ * even a one-way query from the same machine for the next quarter of an hour.
+ *
+ * The arithmetic is the whole story. Each tile retries across every endpoint, so
+ * a blocked instance was being sent 64 x 5 = 320 requests — by a client whose
+ * own comments say that a burst is what earns a refusal. Grinding through the
+ * remaining sixty tiles cannot succeed and deepens the block for the next
+ * attempt.
+ *
+ * Three in a row is enough to tell a dead endpoint from one slow tile. Whatever
+ * was fetched before that is cached, so pressing Generate again resumes rather
+ * than restarting.
+ */
+const CONSECUTIVE_TILE_FAILURES = 3;
 
 /** docs/03-architecture.md caching table: OSM responses for 7 days. */
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -310,6 +328,13 @@ export interface FetchOsmOptions {
    * genuinely empty ground.
    */
   onEndpoint?: (hostname: string) => void;
+  /**
+   * Some areas did not load, but enough did to build something.
+   *
+   * Reported rather than thrown: a model missing a corner of its roads is worth
+   * far more than no model, and the caller is the one that can say so in words.
+   */
+  onPartial?: (info: { fetched: number; total: number; stoppedEarly: boolean }) => void;
 }
 
 /**
@@ -425,26 +450,6 @@ export function mergeResponses(responses: OverpassResponse[]): OverpassResponse 
   return { elements };
 }
 
-/** Run tasks with a bounded number in flight, preserving result order. */
-async function pooled<T>(
-  count: number,
-  limit: number,
-  task: (index: number) => Promise<T>,
-): Promise<T[]> {
-  const results = new Array<T>(count);
-  let next = 0;
-
-  const worker = async () => {
-    for (;;) {
-      const index = next++;
-      if (index >= count) return;
-      results[index] = await task(index);
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(limit, count) }, worker));
-  return results;
-}
 
 /**
  * Fetch every OSM feature in a bbox, splitting large areas into tiles.
@@ -472,20 +477,57 @@ export async function fetchOsm(
 
   const tiles = tileBBox(bbox);
   let done = 0;
+  let failed = 0;
+  let consecutiveFailures = 0;
+  let stoppedEarly = false;
+  const responses: OverpassResponse[] = [];
 
-  const responses = await pooled(tiles.length, TILE_CONCURRENCY, async (index) => {
+  // Deliberately NOT fail-fast. `pooled` used to reject on the first tile that
+  // threw, which meant one blip lost a whole build — nine good tiles fetched,
+  // cached, and then discarded along with the error. Keeping what arrived turns
+  // a total failure into a model missing a corner.
+  const { onAttempt: _perAttempt, ...rest } = options;
+
+  for (let index = 0; index < tiles.length; index++) {
     if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    // The inner fetch's own per-attempt message would overwrite the tile count
-    // on every retry, so progress is reported here instead.
-    const { onAttempt: _perAttempt, ...rest } = options;
-    const response = await fetchOne(tiles[index], layers, rest);
-    done++;
-    options.onAttempt?.(`Map data, area ${done} of ${tiles.length}`);
+
+    // Stop rather than keep hammering. See CONSECUTIVE_TILE_FAILURES.
+    if (consecutiveFailures >= CONSECUTIVE_TILE_FAILURES) {
+      stoppedEarly = true;
+      break;
+    }
+
+    try {
+      responses.push(await fetchOne(tiles[index], layers, rest));
+      consecutiveFailures = 0;
+      done++;
+      options.onAttempt?.(`Map data, area ${done} of ${tiles.length}`);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      consecutiveFailures++;
+      failed++;
+    }
+
     // Space the requests out. A burst is what gets an IP refused, and the
     // cache means this cost is paid once per area rather than per build.
-    if (done < tiles.length) await sleep(options.tileGapMs ?? TILE_GAP_MS, options.signal);
-    return response;
-  });
+    if (index < tiles.length - 1) {
+      await sleep(options.tileGapMs ?? TILE_GAP_MS, options.signal);
+    }
+  }
+
+  // Nothing at all got through: that is an outage, and it should read as one.
+  if (responses.length === 0) {
+    throw new OverpassError(
+      `All ${tiles.length} tiles failed`,
+      `Could not reach OpenStreetMap for any part of this area. The terrain will still ` +
+        `generate — turn the feature layers off to skip this step, or try a smaller ` +
+        `selection, which needs far fewer requests.`,
+    );
+  }
+
+  if (failed > 0 || stoppedEarly) {
+    options.onPartial?.({ fetched: done, total: tiles.length, stoppedEarly });
+  }
 
   return mergeResponses(responses);
 }

@@ -748,3 +748,83 @@ describe('caching', () => {
     );
   });
 });
+
+/**
+ * A tiled fetch keeps what it got (docs/08-pitfalls.md).
+ *
+ * It used to reject on the first tile that threw. On a 64-tile build that meant
+ * nine areas fetched, cached, and then thrown away along with the error — the
+ * user got "could not reach OpenStreetMap" and no features at all, while nine
+ * tiles of perfectly good data sat in their browser.
+ */
+describe('a tiled fetch with some tiles failing', () => {
+  // Big enough to be split into tiles rather than fetched in one query.
+  const BIG = { west: 70.5, south: 30.0, east: 71.2, north: 30.6 };
+  const way = (id: number) => ({ type: 'way', id });
+  const okWith = (id: number) =>
+    ({ ok: true, status: 200, json: async () => ({ elements: [way(id)] }) }) as unknown as Response;
+
+  it('returns the areas that loaded instead of losing them all', async () => {
+    let call = 0;
+    // First two tiles answer, the third fails every attempt, then answers again.
+    const fetchImpl = vi.fn(async () => {
+      call++;
+      if (call >= 3 && call <= 6) throw new TypeError('Failed to fetch');
+      return okWith(call);
+    });
+
+    const partial: unknown[] = [];
+    const result = await fetchOsm(BIG, ['roads'], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      backoffMs: 1,
+      tileGapMs: 0,
+      onPartial: (info) => partial.push(info),
+    });
+
+    expect(result.elements.length).toBeGreaterThan(0);
+    expect(partial).toHaveLength(1);
+  });
+
+  /** Nothing at all IS an outage, and should read as one. */
+  it('still throws when no area loads', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+
+    await expect(
+      fetchOsm(BIG, ['roads'], {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        backoffMs: 1,
+        tileGapMs: 0,
+      }),
+    ).rejects.toThrow(OverpassError);
+  });
+
+  /**
+   * The circuit breaker. Grinding through sixty more tiles against an instance
+   * that has stopped answering cannot succeed and deepens the block — this app
+   * did exactly that to itself and then could not fetch a single way for a
+   * quarter of an hour.
+   */
+  it('gives up early rather than hammering a dead instance', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async () => {
+      call++;
+      if (call <= 2) return okWith(call);
+      throw new TypeError('Failed to fetch');
+    });
+
+    await fetchOsm(BIG, ['roads'], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      backoffMs: 1,
+      tileGapMs: 0,
+      onPartial: () => {},
+    });
+
+    // Two good tiles, then three failed tiles' worth of attempts, and stop —
+    // nowhere near one attempt per remaining tile.
+    const tiles = tileBBox(BIG).length;
+    expect(tiles).toBeGreaterThan(8);
+    expect(fetchImpl.mock.calls.length).toBeLessThan(tiles * OVERPASS_ENDPOINTS.length);
+  });
+});
