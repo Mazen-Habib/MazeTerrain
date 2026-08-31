@@ -1560,7 +1560,13 @@ export async function assemble(
   if (config.tiling.enabled && config.bedSize_mm) {
     report({ stage: 'validating', percent: 97, detail: 'Cutting the model to fit your bed' });
     try {
-      const split = await splitForBed(parts, config.bedSize_mm);
+      const split = await splitForBed(parts, config.bedSize_mm, {
+        // The model outline in print mm, so pins only land where the model is.
+        boundary_mm: featureClip.map(
+          ([x_m, y_m]) => [x_m * scale.scale, y_m * scale.scale] as [number, number],
+        ),
+        baseThickness_mm: config.baseThickness_mm,
+      });
       if (split) {
         parts = split.parts;
         const pieces = split.plan.cols * split.plan.rows - split.emptyCells;
@@ -1572,8 +1578,21 @@ export async function assemble(
             `(${split.plan.cols} x ${split.plan.rows} grid, each about ` +
             `${split.plan.tileWidth_mm.toFixed(0)} x ${split.plan.tileDepth_mm.toFixed(0)} mm) ` +
             `to fit your ${config.bedSize_mm[0]} x ${config.bedSize_mm[1]} mm bed. ` +
-            `Seams are flat butt joints — glue them; there are no alignment pins yet.`,
+            (split.pins > 0
+              ? `${split.pins} alignment pins locate the seams — dry-fit before gluing.`
+              : `Seams are flat butt joints — hold each pair square while the glue sets.`),
         });
+
+        if (split.pinFailure) {
+          warnings.push({
+            level: 'warn',
+            code: 'tile-pins-failed',
+            message:
+              `Alignment pins could not be cut (${split.pinFailure}), so the seams are ` +
+              `plain butt joints. The pieces still fit — hold each pair square while the ` +
+              `glue sets, or dry-fit the whole set face down on a flat surface.`,
+          });
+        }
       }
       throwIfAborted();
     } catch (err) {

@@ -15,7 +15,9 @@
  * is the next step, and `docs/09-roadmap.md` says so rather than this pretending
  * to be finished.
  */
-import { intersectPart } from './boolean';
+import { intersectPart, subtractParts, unionParts } from './boolean';
+import { pinCylinder, pinRadius_mm, planPins, PIN_CLEARANCE_MM } from './pins';
+import type { Ring } from './polygons';
 import type { MeshPart } from './types';
 
 /** One cell of the grid, in model millimetres. */
@@ -186,6 +188,18 @@ export interface SplitResult {
   plan: TilePlan;
   /** Cells that came back empty — a corner of the grid a round model never reaches. */
   emptyCells: number;
+  /** Alignment pins actually cut into the tiles. */
+  pins: number;
+  /**
+   * Why the pins were skipped, or null if they were not.
+   *
+   * Reported rather than swallowed. The first version caught the boolean
+   * failure and quietly returned plain tiles, so a winding bug in the pin
+   * cylinder showed up as "the pins are simply not there" with nothing to go
+   * on. A fallback that hides its own reason is a fallback that never gets
+   * fixed.
+   */
+  pinFailure: string | null;
 }
 
 /**
@@ -199,11 +213,23 @@ export interface SplitResult {
  * Returns null when the model already fits the bed. Nothing to do is not a
  * failure, and the caller should not have to ask twice.
  */
+export interface SplitOptions {
+  margin_mm?: number;
+  /**
+   * Model outline in PRINT mm, and the base thickness, for alignment pins.
+   *
+   * Omit and the seams are plain butt joints, which is what shipped first.
+   */
+  boundary_mm?: Ring | null;
+  baseThickness_mm?: number;
+}
+
 export async function splitForBed(
   parts: MeshPart[],
   bed_mm: readonly [number, number],
-  margin_mm = BED_MARGIN_MM,
+  options: SplitOptions = {},
 ): Promise<SplitResult | null> {
+  const margin_mm = options.margin_mm ?? BED_MARGIN_MM;
   const extent = xyExtent(parts);
   const z = zExtent(parts);
   if (!extent || !z) return null;
@@ -242,5 +268,88 @@ export async function splitForBed(
   }
 
   if (out.length === 0) return null;
-  return { parts: out, plan, emptyCells };
+
+  const pinned = await addPins(out, plan, extent, options);
+  return {
+    parts: pinned.parts,
+    plan,
+    emptyCells,
+    pins: pinned.pins,
+    pinFailure: pinned.failure,
+  };
+}
+
+/**
+ * Peg one side of every seam and socket the other.
+ *
+ * Batched per tile — all of a tile's pegs are unioned in one operation and all
+ * its sockets subtracted in one more, so a 2 x 2 grid costs four booleans
+ * rather than one per pin. Each is a small cylinder against a large mesh, which
+ * is the cheap direction for a boolean.
+ *
+ * A failure here loses the pins, not the tiles: the model is still perfectly
+ * printable with flat seams, which is exactly what it had before this existed.
+ */
+async function addPins(
+  tiles: MeshPart[],
+  plan: TilePlan,
+  extent: { centreX_mm: number; centreY_mm: number },
+  options: SplitOptions,
+): Promise<{ parts: MeshPart[]; pins: number; failure: string | null }> {
+  const baseThickness_mm = options.baseThickness_mm ?? 0;
+  if (!(baseThickness_mm > 0)) return { parts: tiles, pins: 0, failure: null };
+
+  const pins = planPins(plan, {
+    boundary_mm: options.boundary_mm ?? null,
+    baseThickness_mm,
+    centreX_mm: extent.centreX_mm,
+    centreY_mm: extent.centreY_mm,
+  });
+  if (pins.length === 0) return { parts: tiles, pins: 0, failure: null };
+
+  const radius = pinRadius_mm(baseThickness_mm);
+  const pegs = new Map<string, MeshPart[]>();
+  const sockets = new Map<string, MeshPart[]>();
+  for (const [i, pin] of pins.entries()) {
+    const add = (map: Map<string, MeshPart[]>, key: string, mesh: MeshPart) => {
+      const list = map.get(key);
+      if (list) list.push(mesh);
+      else map.set(key, [mesh]);
+    };
+    add(pegs, pin.peg, pinCylinder(pin, radius, `peg:${i}`));
+    // The socket is one clearance wider all round, so the peg goes in.
+    add(sockets, pin.socket, pinCylinder(pin, radius + PIN_CLEARANCE_MM, `socket:${i}`));
+  }
+
+  const out: MeshPart[] = [];
+  let failure: string | null = null;
+  for (const tile of tiles) {
+    // `tile:A1:terrain` -> `A1`. Only the terrain carries the base, so only it
+    // is pinned; pinning a roads layer would put a peg in mid-air.
+    const [, piece, layer] = tile.name.split(':');
+    if (layer !== 'terrain') {
+      out.push(tile);
+      continue;
+    }
+
+    try {
+      let solid = tile;
+      const myPegs = pegs.get(piece) ?? [];
+      if (myPegs.length > 0) {
+        solid = await unionParts([solid, ...myPegs], { name: tile.name, color: tile.color });
+      }
+      const mySockets = sockets.get(piece) ?? [];
+      if (mySockets.length > 0) {
+        solid = await subtractParts(solid, mySockets, { name: tile.name, color: tile.color });
+      }
+      out.push(solid);
+    } catch (err) {
+      // Flat seams are a working model; losing the tile would not be. But the
+      // reason is kept and surfaced, not swallowed.
+      failure ??= err instanceof Error ? err.message : String(err);
+      out.push(tile);
+    }
+  }
+
+  return { parts: out, pins: failure ? 0 : pins.length, failure };
 }

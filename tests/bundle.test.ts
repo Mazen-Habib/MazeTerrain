@@ -134,9 +134,12 @@ describe('the note for a tiled model', () => {
     expect(readme).not.toContain('Tile:A1');
   });
 
-  it('is honest that there are no alignment pins yet', () => {
-    expect(readme).toMatch(/flat butt joints/);
-    expect(readme).toMatch(/no alignment\s*pins yet/);
+  it('explains the alignment pins and their fit', () => {
+    expect(readme).toMatch(/alignment pins/);
+    expect(readme).toMatch(/peg on one piece, a socket on the other/);
+    expect(readme).toContain('0.15 mm clearance');
+    // The old note promised the opposite; it must not survive.
+    expect(readme).not.toMatch(/no alignment/);
   });
 
   /** No insert here, so none of the insert advice should appear. */

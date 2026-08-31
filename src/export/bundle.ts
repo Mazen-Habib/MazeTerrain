@@ -85,10 +85,14 @@ export function readmeText(parts: MeshPart[], options: BundleOptions): string {
           '',
           'Joining the pieces',
           '------------------',
-          'The seams are flat butt joints, cut straight down. There are no alignment',
-          'pins yet: hold each pair square while the glue sets, or dry-fit the whole',
-          'set face down on a flat surface and glue it in one go, which keeps the',
-          'tops level. Model cement or cyanoacrylate both work on PLA.',
+          'Each seam has alignment pins: a peg on one piece, a socket on the other,',
+          'down in the base where they never show. Dry-fit the whole set before',
+          'gluing — the pins locate it, so a piece that will not sit flush is a',
+          'piece in the wrong place. They are a press fit with 0.15 mm clearance;',
+          'if one is tight, a twist of sandpaper on the peg is enough.',
+          '',
+          'Glue the seams once the set is dry-fitted. Model cement or cyanoacrylate',
+          'both work on PLA.',
           '',
         ]
       : [];
