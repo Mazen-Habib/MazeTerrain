@@ -48,6 +48,15 @@ export interface RouteBuildStats {
 export interface RouteBuildResult {
   mesh: SolidMesh;
   stats: RouteBuildStats;
+  /**
+   * The flat ribbon this was extruded from, in WORLD METRES.
+   *
+   * Exposed so the channel and the insert can be compared as the 2D shapes they
+   * are. Measuring their clearance off the finished solids means picking the
+   * outline back out of a draped mesh, which measures the extrusion as much as
+   * the offset.
+   */
+  footprint?: MultiPolygon;
 }
 
 /**
@@ -165,7 +174,15 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
   const { style } = route;
 
   // 1. Project to the local ENU frame the whole build shares.
-  const projected: Pt[] = route.points.map((p) => projectENU(p.lon, p.lat, scale.origin));
+  //
+  // Non-finite points are dropped here, at the boundary, rather than trusted.
+  // A NaN coordinate does not fail loudly downstream — it propagates into the
+  // distance field, and the ribbon tracer then never terminates. The worker
+  // spins forever with no progress and no error, which is the worst failure
+  // this pipeline can produce; a bad point is cheaper to discard than to debug.
+  const projected: Pt[] = route.points
+    .filter((p) => Number.isFinite(p.lon) && Number.isFinite(p.lat))
+    .map((p) => projectENU(p.lon, p.lat, scale.origin));
 
   // 1b. Round the corners of a hand-drawn line (F1.3).
   //
@@ -319,6 +336,7 @@ export function buildRouteSolid(route: Route, options: BuildRouteOptions): Route
 
   return {
     mesh,
+    footprint,
     stats: {
       ...emptyStats,
       triangles: mesh.triangles,
