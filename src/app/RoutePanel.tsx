@@ -8,6 +8,7 @@ import { useRef, useState } from 'react';
 import type { ColorMode, CutoutSubMode } from '../geometry/types';
 import type { Route } from '../data/gpx/types';
 import { canEditVertices } from '../map/editPath';
+import { ROUTE_FILE_ACCEPT } from '../data/gpx/parse';
 import { formatDistance, formatElevation, type DistanceUnit } from '../config/units';
 import { NumberField } from './NumberField';
 
@@ -96,13 +97,17 @@ export function RoutePanel({
         }}
       >
         <button className="btn" disabled={busy} onClick={() => input.current?.click()}>
-          Upload GPX file(s)
+          Upload route file(s)
         </button>
-        <p className="field__hint">or drag them here</p>
+        {/* Naming the formats here rather than only in the file dialog: a user
+            with a .fit from their watch has no reason to guess that it is
+            accepted, and the whole point of accepting it is that they stop
+            converting files first. */}
+        <p className="field__hint">or drag them here — GPX, TCX or FIT</p>
         <input
           ref={input}
           type="file"
-          accept=".gpx,application/gpx+xml"
+          accept={ROUTE_FILE_ACCEPT}
           multiple
           hidden
           onChange={(e) => {

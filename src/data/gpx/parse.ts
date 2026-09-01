@@ -1,11 +1,24 @@
 /**
- * GPX -> Route.
+ * Recorded route files -> Route.
  *
- * Parsing goes through @tmcw/togeojson. Hand-rolling XML for this is a trap:
- * real exports from Strava, Garmin, Komoot and Wahoo differ in namespacing,
- * extensions and which of trk/rte/wpt they populate.
+ * Three formats, one output:
+ *
+ *  - **GPX**, what every site exports and what v1 shipped with;
+ *  - **TCX**, what several sites export instead, and free here because
+ *    togeojson already reads it;
+ *  - **FIT**, what Garmin and Wahoo devices actually write — decoded in
+ *    `./fit.ts`, because it is binary and no library we depend on reads it.
+ *
+ * The XML formats go through @tmcw/togeojson. Hand-rolling XML for this is a
+ * trap: real exports from Strava, Garmin, Komoot and Wahoo differ in
+ * namespacing, extensions and which of trk/rte/wpt they populate.
+ *
+ * Accepting all three is the answer to the export friction that a Strava OAuth
+ * import was meant to solve, after Strava's June 2026 developer tiers put that
+ * out of reach — see `OPEN-QUESTIONS.md` Q4.
  */
-import { gpx } from '@tmcw/togeojson';
+import { gpx, tcx } from '@tmcw/togeojson';
+import { FitParseError, parseFit } from './fit';
 import type { Feature, FeatureCollection, Geometry, Position } from 'geojson';
 import { defaultRouteStyle, MAX_POINTS_PER_ROUTE, ROUTE_PALETTE, type Route, type RoutePoint } from './types';
 import type { BBox } from '../../geometry/types';
@@ -194,12 +207,27 @@ export function parseGpxDocument(doc: Document, filename: string): Route[] {
 
   const lines = extractLines(fc);
   if (lines.length === 0) {
-    throw new GpxParseError(
-      `${filename} contains no track points. Export the activity as GPX rather than TCX or FIT.`,
-    );
+    throw new GpxParseError(`${filename} contains no track points.`);
   }
 
-  const base = filename.replace(/\.gpx$/i, '');
+  return routesFrom(lines, filename);
+}
+
+/**
+ * Build routes from named point lists.
+ *
+ * Shared by all three formats so a FIT file and a GPX file of the same ride
+ * come out identical downstream — same cap, same colour cycle, same derived
+ * distance and gain. `source` stays `'gpx'` for every recorded file: the field
+ * only ever distinguishes recorded from hand-drawn (which is what needs the
+ * smoothing control), and widening it would mean migrating every saved `.mzt`
+ * to say something nothing reads.
+ */
+function routesFrom(
+  lines: Array<{ name: string | null; points: RoutePoint[] }>,
+  filename: string,
+): Route[] {
+  const base = filename.replace(/\.(gpx|tcx|fit)$/i, '');
 
   return lines.map((line, i) => {
     const points = capPoints(line.points);
@@ -218,12 +246,73 @@ export function parseGpxDocument(doc: Document, filename: string): Route[] {
   });
 }
 
-/** Browser entry point: text -> routes. */
-export function parseGpxText(text: string, filename: string): Route[] {
+/** Parse XML once, with a readable failure. Shared by GPX and TCX. */
+function parseXml(text: string, filename: string): Document {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
-  const failure = doc.getElementsByTagName('parsererror')[0];
-  if (failure) {
+  if (doc.getElementsByTagName('parsererror')[0]) {
     throw new GpxParseError(`${filename} is not valid XML and could not be parsed.`);
   }
-  return parseGpxDocument(doc, filename);
+  return doc;
+}
+
+/** Browser entry point: text -> routes. */
+export function parseGpxText(text: string, filename: string): Route[] {
+  return parseGpxDocument(parseXml(text, filename), filename);
+}
+
+/**
+ * TCX -> routes.
+ *
+ * Garmin's older XML format, and still what several sites hand back. togeojson
+ * reads it into the same GeoJSON shape as GPX, so everything after this line is
+ * the code GPX already uses — including the waypoint fallback, which TCX needs
+ * more often, since a course with no `Track` still has a `CoursePoint` list.
+ */
+export function parseTcxText(text: string, filename: string): Route[] {
+  const doc = parseXml(text, filename);
+  let fc: FeatureCollection;
+  try {
+    fc = tcx(doc) as FeatureCollection;
+  } catch (err) {
+    throw new GpxParseError(
+      `${filename} could not be read as TCX (${err instanceof Error ? err.message : String(err)}).`,
+    );
+  }
+
+  const lines = extractLines(fc);
+  if (lines.length === 0) {
+    throw new GpxParseError(`${filename} contains no track points.`);
+  }
+  return routesFrom(lines, filename);
+}
+
+/** FIT -> routes. One activity, so one route. */
+export function parseFitBuffer(buffer: ArrayBuffer, filename: string): Route[] {
+  return routesFrom([{ name: null, points: parseFit(buffer, filename) }], filename);
+}
+
+/** Formats the file picker accepts, and what the drop zone tells the user. */
+export const ROUTE_FILE_ACCEPT = '.gpx,.tcx,.fit,application/gpx+xml';
+
+/**
+ * One file in, routes out, by extension.
+ *
+ * Extension rather than sniffing content: FIT has to be read as an
+ * `ArrayBuffer` and the XML formats as text, and that decision has to be made
+ * before the file is read. A misnamed file is caught by the signature check
+ * inside each parser, which is where the error message can actually say what
+ * the file looked like.
+ */
+export async function parseRouteFile(file: File): Promise<Route[]> {
+  const name = file.name;
+  if (/\.fit$/i.test(name)) {
+    try {
+      return parseFitBuffer(await file.arrayBuffer(), name);
+    } catch (err) {
+      if (err instanceof FitParseError) throw new GpxParseError(err.userMessage);
+      throw err;
+    }
+  }
+  if (/\.tcx$/i.test(name)) return parseTcxText(await file.text(), name);
+  return parseGpxText(await file.text(), name);
 }

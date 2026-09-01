@@ -12,6 +12,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Route } from '../data/gpx/types';
 import { selectionBBox, type SelectionShape } from '../geometry/selection';
 import { BASEMAPS, demSource } from './basemaps';
+import type { DistanceUnit } from '../config/units';
 import {
   finishPolygon,
   isClickTool,
@@ -30,6 +31,13 @@ const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: 
 
 interface MapViewProps {
   basemapId: string;
+  /**
+   * Units for the scale bar (Q14).
+   *
+   * The scale bar is a ground-distance readout like any other, so it follows
+   * the toggle. Nothing about the print does.
+   */
+  unit: DistanceUnit;
   /** Bumped when the selection was set from outside the map and the view should follow. */
   fitNonce: number;
   datasetId: string;
@@ -92,6 +100,7 @@ type Interaction =
 
 export function MapView({
   basemapId,
+  unit,
   fitNonce,
   datasetId,
   terrain3d,
@@ -125,6 +134,8 @@ export function MapView({
   }, [routes, editingRouteId]);
 
   const live = useRef({
+    basemapId,
+    unit,
     shape,
     tool,
     sun,
@@ -139,6 +150,8 @@ export function MapView({
     onCursor,
   });
   live.current = {
+    basemapId,
+    unit,
     shape,
     tool,
     sun,
@@ -152,6 +165,8 @@ export function MapView({
     onToolFinished,
     onCursor,
   };
+
+  const scaleControl = useRef<maplibregl.ScaleControl | null>(null);
 
   const setData = useCallback((id: string, data: GeoJSON.GeoJSON) => {
     const source = map.current?.getSource(id) as maplibregl.GeoJSONSource | undefined;
@@ -170,9 +185,16 @@ export function MapView({
       // no beforeId puts a layer on top of everything, and a hillshade stretched
       // over the whole style renders as a uniform pale wash that hides the map
       // completely — it looks exactly like a basemap that failed to load.
-      const firstLineLayer = (m.getStyle()?.layers ?? []).find(
-        (l) => l.type === 'line' || l.type === 'symbol',
-      )?.id;
+      // A raster basemap has no line or symbol layer to find, so satellite
+      // names its label overlay explicitly. Without that the search returns
+      // undefined, the hillshade goes on top of the imagery, and the map looks
+      // broken rather than shaded.
+      const basemap = BASEMAPS.find((b) => b.id === live.current.basemapId);
+      const firstLineLayer =
+        (basemap?.labelLayerId && m.getLayer(basemap.labelLayerId)
+          ? basemap.labelLayerId
+          : undefined) ??
+        (m.getStyle()?.layers ?? []).find((l) => l.type === 'line' || l.type === 'symbol')?.id;
 
       m.addLayer(
         {
@@ -339,7 +361,7 @@ export function MapView({
     const style = BASEMAPS.find((b) => b.id === basemapId) ?? BASEMAPS[0];
     const m = new maplibregl.Map({
       container: container.current,
-      style: style.styleUrl,
+      style: style.style,
       center: [73.05, 33.72],
       zoom: 9,
       attributionControl: { compact: false },
@@ -357,7 +379,12 @@ export function MapView({
     });
 
     m.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
-    m.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+    // Kept on the ref so the units toggle can retune it without rebuilding the
+    // map. MapLibre has no setter for this, so the control is replaced.
+    scaleControl.current = new maplibregl.ScaleControl({
+      unit: live.current.unit === 'imperial' ? 'imperial' : 'metric',
+    });
+    m.addControl(scaleControl.current, 'bottom-left');
     m.on('style.load', addOverlays);
 
     const toLonLat = (e: MapMouseEvent): LonLat => [e.lngLat.lng, e.lngLat.lat];
@@ -610,8 +637,44 @@ export function MapView({
     if (!m || !style || mountedBasemap.current === basemapId) return;
     mountedBasemap.current = basemapId;
     ready.current = false;
-    m.setStyle(style.styleUrl);
+    // Drop the terrain FIRST.
+    //
+    // `setTerrain` holds a reference into the current style's source cache, and
+    // `setStyle` tears that style down underneath it. MapLibre's style diff then
+    // fails on the dangling reference — "Cannot read properties of undefined
+    // (reading '_checkLoaded')" — falls back to rebuilding from scratch, and
+    // that rebuild never completes: `getStyle()` returns null and the map is
+    // left blank with no error thrown anywhere the user can see.
+    //
+    // This is why the bug hid. Basemap switching worked for months, and only
+    // broke when live terrain became the DEFAULT (F3.2) — before that the
+    // terrain was off unless someone turned it on, so the two features were
+    // almost never active at once. See
+    // `08-pitfalls.md#switching-basemaps-with-terrain-on-blanks-the-map`.
+    //
+    // `addOverlays` re-applies the terrain once the new style loads, so the
+    // setting survives the swap even though the terrain object does not.
+    if (m.getTerrain()) m.setTerrain(null);
+    m.setStyle(style.style);
   }, [basemapId]);
+
+  /**
+   * Retune the scale bar when the units toggle moves.
+   *
+   * `ScaleControl` reads its unit once, at construction, and exposes no setter,
+   * so the only way to change it is to remove the control and add a new one.
+   * Not gated on `ready` — the control is a DOM overlay and has nothing to do
+   * with the style being loaded.
+   */
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !scaleControl.current) return;
+    m.removeControl(scaleControl.current);
+    scaleControl.current = new maplibregl.ScaleControl({
+      unit: unit === 'imperial' ? 'imperial' : 'metric',
+    });
+    m.addControl(scaleControl.current, 'bottom-left');
+  }, [unit]);
 
   /**
    * Move the light.

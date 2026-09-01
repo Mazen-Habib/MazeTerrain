@@ -10,43 +10,118 @@
  * CDN for products, and treating it as one gets your IP blocked
  * (docs/08-pitfalls.md#tile-server-abuse).
  */
+import type { StyleSpecification } from 'maplibre-gl';
 import { DEM_DATASETS } from '../data/dem/datasets';
 
 export interface Basemap {
   id: string;
   label: string;
-  styleUrl: string;
+  /**
+   * A style URL, or a style built here.
+   *
+   * The OpenFreeMap basemaps are hosted vector styles and are just a URL. The
+   * satellite one has no hosted style to point at — it is raster tiles served
+   * straight from ArcGIS — so it is assembled below.
+   */
+  style: string | StyleSpecification;
+  /**
+   * The layer the hillshade and overlays must be inserted BEFORE, so labels
+   * stay readable on top of them.
+   *
+   * Left unset, `MapView` falls back to the first line or symbol layer, which
+   * is right for a vector style and finds nothing at all in a raster one — and
+   * a hillshade with no `beforeId` lands on top of everything and renders as a
+   * uniform pale wash that looks exactly like a basemap that failed to load.
+   */
+  labelLayerId?: string;
   /** Shown bottom-right, non-dismissible. Legally required, not decorative. */
   attribution: string;
 }
+
+/**
+ * Esri World Imagery, as a MapLibre style (OPEN-QUESTIONS Q6).
+ *
+ * Free **for non-commercial use, with attribution**. That is a promise the
+ * project now makes rather than a state it happens to be in — Q2 landed on
+ * "free with voluntary contributions" on 2026-09-01, and if that is ever
+ * revisited this basemap goes with it. See `docs/04-data-sources.md`.
+ *
+ * The labels are a second, separate tile set. Imagery on its own is genuinely
+ * hard to navigate — without place names there is no way to tell which valley
+ * you are looking at — so the reference overlay is not decoration, it is what
+ * makes the basemap usable for choosing a selection.
+ *
+ * ArcGIS REST tile paths are `/tile/{level}/{row}/{col}`, which is z/y/x. The
+ * x and y read the wrong way round here on purpose; swapping them to look
+ * tidier mirrors the world.
+ */
+const ARCGIS = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+
+const SATELLITE_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    'esri-imagery': {
+      type: 'raster',
+      tiles: [`${ARCGIS}/World_Imagery/MapServer/tile/{z}/{y}/{x}`],
+      tileSize: 256,
+      // World Imagery is deeper than this in some cities and shallower in
+      // others. Capping here means MapLibre upscales the last good tile past
+      // z19 rather than requesting tiles that come back as blank squares.
+      maxzoom: 19,
+      attribution: 'Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+    },
+    'esri-labels': {
+      type: 'raster',
+      tiles: [`${ARCGIS}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`],
+      tileSize: 256,
+      maxzoom: 19,
+    },
+  },
+  layers: [
+    // Under the imagery, so a tile that has not arrived yet is dark rather
+    // than white. White reads as "broken"; dark reads as "loading".
+    { id: 'background', type: 'background', paint: { 'background-color': '#0b1016' } },
+    { id: 'esri-imagery', type: 'raster', source: 'esri-imagery' },
+    { id: 'satellite-labels', type: 'raster', source: 'esri-labels' },
+  ],
+};
 
 export const BASEMAPS: Basemap[] = [
   {
     id: 'street',
     label: 'Street',
-    styleUrl: 'https://tiles.openfreemap.org/styles/liberty',
+    style: 'https://tiles.openfreemap.org/styles/liberty',
     attribution: '© OpenStreetMap contributors · OpenFreeMap',
   },
   {
     id: 'bright',
     label: 'Bright',
-    styleUrl: 'https://tiles.openfreemap.org/styles/bright',
+    style: 'https://tiles.openfreemap.org/styles/bright',
     attribution: '© OpenStreetMap contributors · OpenFreeMap',
   },
   {
     id: 'light',
     label: 'Light',
-    styleUrl: 'https://tiles.openfreemap.org/styles/positron',
+    style: 'https://tiles.openfreemap.org/styles/positron',
     attribution: '© OpenStreetMap contributors · OpenFreeMap',
+  },
+  {
+    id: 'satellite',
+    label: 'Satellite',
+    style: SATELLITE_STYLE,
+    labelLayerId: 'satellite-labels',
+    // Verbatim from `docs/04-data-sources.md` §6, which lists it as
+    // non-negotiable. Do not shorten it to fit the footer.
+    attribution:
+      'Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community · Powered by Esri',
   },
 ];
 
 /**
- * Satellite is missing on purpose. Esri World Imagery is free for
- * non-commercial use with attribution, and OPEN-QUESTIONS **Q6** cannot be
- * answered until **Q2** (free vs paid) is. Adding it now would bake a licensing
- * assumption into the product. Topo is absent for the related reason that
- * OpenTopoMap asks not to be used as a product tile server.
+ * Satellite landed 2026-09-01, once Q2 resolved to free and unblocked Q6.
+ *
+ * Topo is still absent, for the unrelated reason that OpenTopoMap asks not to
+ * be used as a product tile server.
  */
 export const DEFAULT_BASEMAP = 'street';
 

@@ -6,6 +6,7 @@ import {
   GpxParseError,
   haversine,
   parseGpxText,
+  parseTcxText,
   routeDistance,
   unionBBox,
 } from '../src/data/gpx/parse';
@@ -260,5 +261,58 @@ describe('smoothPolyline', () => {
       [1, 1],
     ];
     expect(smoothPolyline(line, 1)).toEqual(line);
+  });
+});
+
+// --- TCX -------------------------------------------------------------------
+
+/**
+ * TCX is read by togeojson, so these are not testing an XML parser — they are
+ * testing that the wrapper hands it the same treatment GPX gets: the shared
+ * route builder, the extension stripped from the name, and elevation and
+ * distance derived rather than trusted.
+ */
+describe('TCX', () => {
+  const tcxDoc = (trackpoints: string) => `<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities><Activity Sport="Running"><Id>2026-06-01T06:00:00Z</Id>
+    <Lap><Track>${trackpoints}</Track></Lap>
+  </Activity></Activities>
+</TrainingCenterDatabase>`;
+
+  const point = (lat: number, lon: number, ele: number, time: string) => `
+    <Trackpoint><Time>${time}</Time>
+      <Position><LatitudeDegrees>${lat}</LatitudeDegrees><LongitudeDegrees>${lon}</LongitudeDegrees></Position>
+      <AltitudeMeters>${ele}</AltitudeMeters>
+    </Trackpoint>`;
+
+  it('reads a track and derives distance and gain', () => {
+    const routes = parseTcxText(
+      tcxDoc(
+        point(46.0207, 7.7491, 1620, '2026-06-01T06:00:00Z') +
+          point(46.0307, 7.7491, 1700, '2026-06-01T06:05:00Z') +
+          point(46.0407, 7.7491, 1660, '2026-06-01T06:10:00Z'),
+      ),
+      'Morning_Run.tcx',
+    );
+
+    expect(routes).toHaveLength(1);
+    expect(routes[0].name).toBe('Morning_Run');
+    expect(routes[0].points).toHaveLength(3);
+    // Two 0.01-degree steps of latitude, a shade over 1.1 km each.
+    expect(routes[0].distance_m).toBeGreaterThan(2000);
+    expect(routes[0].distance_m).toBeLessThan(2400);
+    // Only the climb counts; the descent does not cancel it.
+    expect(routes[0].elevationGain_m).toBeCloseTo(80, 0);
+  });
+
+  it('refuses a TCX with no trackpoints, by name', () => {
+    expect(() => parseTcxText(tcxDoc(''), 'empty.tcx')).toThrow(/empty\.tcx/);
+  });
+
+  it('refuses malformed XML rather than returning an empty route', () => {
+    expect(() => parseTcxText('<TrainingCenterDatabase><oops', 'broken.tcx')).toThrow(
+      GpxParseError,
+    );
   });
 });

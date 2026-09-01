@@ -1117,3 +1117,49 @@ body {
   font-weight: 600;
   color: var(--accent);
 }
+
+/* --- Q13: desktop-only, said out loud --------------------------------------
+   Hidden at every size the app is designed for, so it costs nothing until the
+   viewport is one the app cannot serve. 860px is just under the width at which
+   the sidebar and the map stop both fitting. */
+.smallscreen {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .smallscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--bg);
+  }
+
+  .smallscreen__card {
+    max-width: 30rem;
+    padding: 28px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+
+  .smallscreen__card h2 {
+    margin: 0 0 12px;
+    font-size: 20px;
+  }
+
+  .smallscreen__card p {
+    margin: 0 0 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .smallscreen__note {
+    margin-bottom: 0 !important;
+    color: var(--text) !important;
+    font-weight: 600;
+  }
+}

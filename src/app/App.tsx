@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEM_DATASETS } from '../data/dem/datasets';
 import { BED_PRESETS, defaultConfig, PRESETS } from '../config/presets';
-import { GpxParseError, parseGpxText, routeDistance } from '../data/gpx/parse';
+import { GpxParseError, parseRouteFile, routeDistance } from '../data/gpx/parse';
 import { defaultRouteStyle, ROUTE_PALETTE, type Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
 import { writeThreeMF, threeMFFilename } from '../export/threemf';
@@ -445,7 +445,7 @@ export function App() {
       const failures: string[] = [];
       for (const file of Array.from(files)) {
         try {
-          for (const route of parseGpxText(await file.text(), file.name)) parsed.push(route);
+          for (const route of await parseRouteFile(file)) parsed.push(route);
         } catch (err) {
           failures.push(err instanceof GpxParseError ? err.userMessage : String(err));
         }
@@ -766,6 +766,25 @@ export function App() {
 
   return (
     <div className="layout">
+      {/*
+        Q13 resolved to desktop-only. That is a decision about what to BUILD,
+        not a licence to serve a phone the desktop layout and let it work the
+        rest out — a 1400 px sidebar beside a map, on a 390 px screen, reads as
+        a broken site rather than a deliberate scope. Purely CSS-driven, so it
+        cannot disagree with the layout it is covering for.
+      */}
+      <div className="smallscreen" role="alert">
+        <div className="smallscreen__card">
+          <h2>MazeTerrain needs a bigger screen</h2>
+          <p>
+            Choosing an area and setting up a print means drawing on a map and working
+            through a column of settings. Both are genuinely bad on a phone, so rather
+            than shipping a version that fights you, there is not one yet.
+          </p>
+          <p className="smallscreen__note">Open this on a laptop or desktop.</p>
+        </div>
+      </div>
+
       <header className="topbar">
         <h1>
           MazeTerrain <span className="topbar__phase">Phase 2</span>
@@ -1546,6 +1565,7 @@ export function App() {
         <main className="viewport">
           <div className={view === 'map' ? 'stage' : 'stage stage--hidden'}>
             <MapView
+            unit={unit}
               basemapId={basemapId}
               fitNonce={fitNonce}
               datasetId={config.dataset}
