@@ -1,6 +1,6 @@
 # Open Questions
 
-*Last updated: 2026-08-17*
+*Last updated: 2026-09-01*
 
 Unresolved decisions. **Add to this file whenever you hit a fork you can't resolve
 alone.** Format: question, why it matters, options, owner, status.
@@ -14,15 +14,26 @@ alone.** Format: question, why it matters, options, owner, status.
 **Why it matters:** domain, package name, export filenames, 3MF metadata strings.
 **Status:** open · **Owner:** project owner
 
-### Q2 — Free vs paid
-Every free competitor is donation-funded and eats real infrastructure cost (Overpass,
-DEM bandwidth, eventually a planet mirror). Type II charges because it's a fulfilment
-business.
-**Options:** fully free + donations · free with a size cap and paid tier above it
-(Type II caps free at 75 mm) · free tool + optional print fulfilment.
-**Why it matters:** determines whether we need accounts, payments, and quota tracking in
-the architecture at all — and whether Esri's non-commercial imagery terms are usable.
-**Status:** open · **Owner:** project owner
+### Q2 — Free vs paid — **resolved 2026-09-01: free, with voluntary contributions**
+Owner: "ditch the paid one, add contribution for now."
+
+No size cap, no paid tier, no fulfilment gate. What this buys, and it is the reason the
+decision was easy:
+
+- **No accounts, no payments, no quota tracking, no backend.** The paid option was the
+  only thing that required any of them. MazeTerrain stays entirely client-side.
+- **Esri World Imagery becomes usable** under its non-commercial terms, which unblocks Q6.
+- **No payment surface to secure.** Contributions are an outbound link to a hosted
+  platform; the app never sees a card number or a billing detail. See
+  `src/config/support.ts`.
+
+The cost side is unchanged and still real: Overpass is volunteer infrastructure and DEM
+bandwidth is not free. That is now a Q8 problem (when to self-host) rather than a pricing
+one.
+
+Two things this decision does NOT settle: Q3 (print fulfilment is a separate business,
+still open) and Q5 (if contributions ever become revenue in a way that matters, the ODbL
+question needs a real opinion rather than a working assumption).
 
 ### Q3 — Do we offer print fulfilment?
 The highest-margin version of this product prints and ships the model. Very different
@@ -33,14 +44,31 @@ business.
 
 ## Legal / data
 
-### Q4 — Strava API terms
-Direct Strava OAuth import would remove the "export your GPX manually" friction, which is
-the single biggest drop-off point in the funnel.
-**Concern:** Strava's API terms restrict derivative products, bulk data use, and some
-commercial applications; approval is not automatic and terms have tightened historically.
-**Action:** read the current API agreement before building anything. v1 ships manual GPX
-upload regardless.
-**Status:** open · needs a real read, not a guess
+### Q4 — Strava API terms — **resolved 2026-09-01: not building it**
+Checked rather than assumed, and the owner's instinct was right — Strava restructured the
+developer program in June 2026 and there is no longer a free tier that fits this project:
+
+| | Standard | Extended Access |
+|---|---|---|
+| athletes | **10** | large user bases |
+| requirement | an active Strava subscription (~$11.99/mo) **from the developer** | application, reviewed and approved by Strava |
+| approval | self-service | "generally inclusive of applications serving 10 000 users or more" |
+
+The subscription is not the blocker. **The 10-athlete cap is.** Standard tier cannot serve
+a public tool at all, and Extended Access is explicitly aimed at applications that already
+have ten thousand users — which a tool with no Strava integration cannot acquire. There is
+no rung on this ladder that a new free project can stand on.
+
+Also relevant: as of 1 June 2026 Strava blocks apps routing its data through third-party
+intermediary platforms, and from 1 June 2027 the token and URL scheme changes — so the
+integration would need rework on Strava's schedule, not ours.
+
+**Instead**, to attack the same friction (manual export is the biggest drop-off) without
+an API: accept `.fit` and `.tcx` alongside `.gpx`. Garmin and Wahoo devices write `.fit`
+natively, so today those users convert a file before they can even start. That is free,
+needs nobody's approval, and helps people who do not use Strava at all.
+
+**Status:** resolved · revisit only if Strava's tiers change
 
 ### Q5 — ODbL and monetisation
 Working assumption (see `docs/04-data-sources.md`, §6 Attribution requirements): a 3D model
@@ -49,10 +77,12 @@ long as we never distribute raw OSM extracts.
 **Action:** if the project takes money, get an actual legal opinion.
 **Status:** open · assumption documented, not verified
 
-### Q6 — Satellite imagery licensing
-Esri World Imagery is free with attribution for non-commercial use. If Q2 lands on
-"paid", we need a different provider or a licence.
-**Status:** blocked on Q2
+### Q6 — Satellite imagery licensing — **unblocked 2026-09-01**
+Esri World Imagery is free with attribution for non-commercial use. Q2 resolved to free,
+so those terms apply and the satellite basemap can be built.
+**Carries an obligation:** "non-commercial" is now a promise the project is making, not
+just a box it happens to sit in. If Q2 is ever revisited, this basemap goes with it.
+**Status:** ready to build · no longer blocked
 
 ---
 
@@ -113,21 +143,42 @@ Prints larger than a 256 mm bed need tiling. It's specced as Phase 4, but a user
 for a 300 mm wall piece hits a wall immediately.
 **Status:** open · currently Phase 4
 
-### Q13 — Mobile scope
-Drawing a polygon on a phone is genuinely bad UX. Is "view and export an existing
-project" enough for v1 mobile, or does the whole flow need to work?
-**Status:** open · current spec says desktop-first
+### Q13 — Mobile scope — **resolved 2026-09-01: none, for now**
+Owner: "NO mobile scope for now." Desktop-only. Not a responsive pass, not view-and-export
+— nothing.
+
+**The one thing this still owes:** a phone that loads the app currently gets the desktop
+layout, badly, with no explanation. Whatever ships to real users needs a short "open this
+on a computer" screen below some width, because silently serving a broken layout is not
+the same decision as declining to support mobile.
+
+**Status:** resolved · the small-screen notice is tracked in the roadmap, not here
 
 ---
 
 ## UX
 
-### Q14 — Units: metric only?
-All specced parameters are mm/m/km. US users think in inches for print size, and miles
-for route distance.
-**Options:** metric only · a global unit toggle (Type II has one) · metric for print,
-user-locale for distances.
-**Status:** open
+### Q14 — Units — **resolved 2026-09-01: split. Shipped same day.**
+Print dimensions are always millimetres; ground distances, elevations and areas follow a
+toggle that defaults from browser locale (US → imperial, everywhere else → metric).
+
+Why split rather than a global toggle: every printer and slicer in this space speaks mm,
+`worldToPrint()` is the one conversion this codebase permits, and nobody sets a base
+thickness of 0.118 inches. Converting print sizes would have been work in service of a
+worse readout.
+
+Two limits, deliberate and documented in `src/config/units.ts`:
+
+- **Readouts convert; inputs do not.** Contour interval and DEM sampling step stay metric
+  sliders, because converting an input means changing its domain, its step, its stored
+  meaning and its parsing — exactly the cost the global-toggle option carried. If US users
+  turn out to want 40 ft contour intervals, that is a separate deliberate change.
+- **Filament length stays metric.** It is print-side and sold by the metre everywhere.
+
+`en-GB` deliberately defaults to metric despite miles on road signs, because the same
+reader wants hill heights in metres and one flag cannot serve both.
+
+**Status:** resolved · `src/config/units.ts`, `tests/units.test.ts`
 
 ---
 

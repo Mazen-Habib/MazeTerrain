@@ -52,6 +52,18 @@ import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
 import { SunControl, DEFAULT_SUN, type SunPosition } from './SunControl';
+import { SUPPORT_LABEL, SUPPORT_URL } from '../config/support';
+import {
+  formatArea,
+  formatElevation,
+  formatElevationRange,
+  formatExtent,
+  formatGroundLength,
+  readUnit,
+  writeUnit,
+  UNIT_LABEL,
+  type DistanceUnit,
+} from '../config/units';
 import { EstimatePanel, defaultFilamentSettings, type FilamentSettings } from './EstimatePanel';
 import { LayersPanel } from './LayersPanel';
 import { ProjectPanel } from './ProjectPanel';
@@ -179,6 +191,14 @@ export function App() {
    */
   const [filament, setFilament] = useState<FilamentSettings>(defaultFilamentSettings);
   const [basemapId, setBasemapId] = useState(BASEMAPS[0].id);
+  /**
+   * Display units (Q14). Read once on mount — `localStorage` is not available
+   * during a server render, and this is a preference, not model state.
+   *
+   * Deliberately NOT part of `config`: changing it must not mark the model
+   * dirty. Nothing about the mesh depends on which word sits after the number.
+   */
+  const [unit, setUnit] = useState<DistanceUnit>(() => readUnit());
   /**
    * Live terrain on by default (F3.2).
    *
@@ -813,6 +833,7 @@ export function App() {
             onEnabledChange={setTerrain3d}
           />
           <RoutePanel
+            unit={unit}
             colorMode={config.colorMode}
             cutoutSubMode={config.cutout.subMode}
             insertProud_mm={config.cutout.insertProud_mm}
@@ -835,6 +856,7 @@ export function App() {
           />
 
           <LayersPanel
+            unit={unit}
             layers={config.layers}
             busy={busy}
             nozzleDiameter_mm={config.nozzleDiameter_mm}
@@ -851,7 +873,7 @@ export function App() {
           <section>
             <h2>Selection</h2>
             <p className="note">
-              Current area: <strong>{areaLabel}</strong> · {area_km2.toFixed(1)} km²
+              Current area: <strong>{areaLabel}</strong> · {formatArea(area_km2, unit)}
             </p>
             <label className="field__label" htmlFor="preset">
               Jump to
@@ -1231,9 +1253,10 @@ export function App() {
                     onChange={(v) => update({ contours: { ...config.contours, interval_m: v } })}
                     hint={
                       bundle
-                        ? `This area spans ${(
-                            bundle.stats.elevationRange_m[1] - bundle.stats.elevationRange_m[0]
-                          ).toFixed(0)} m.`
+                        ? `This area spans ${formatElevation(
+                            bundle.stats.elevationRange_m[1] - bundle.stats.elevationRange_m[0],
+                            unit,
+                          )}.`
                         : 'Real metres of elevation between rings.'
                     }
                   />
@@ -1485,12 +1508,11 @@ export function App() {
               <dl className="stats">
                 <dt>Real extent</dt>
                 <dd>
-                  {(gridPreview.extentX_m / 1000).toFixed(1)} ×{' '}
-                  {(gridPreview.extentY_m / 1000).toFixed(1)} km
+                  {formatExtent(gridPreview.extentX_m / 1000, gridPreview.extentY_m / 1000, unit)}
                 </dd>
                 <dt>Sampling step</dt>
                 <dd>
-                  {gridPreview.resolution_m.toFixed(1)} m
+                  {formatGroundLength(gridPreview.resolution_m, unit)}
                   {gridPreview.resolutionNozzleLimited ? (
                     <span className="badge">nozzle-limited</span>
                   ) : null}
@@ -1513,7 +1535,7 @@ export function App() {
             onApplyPreset={onApplyPreset}
           />
 
-          {bundle ? <Results bundle={bundle} dirty={dirty} /> : null}
+          {bundle ? <Results bundle={bundle} dirty={dirty} unit={unit} /> : null}
           {error ? (
             <section>
               <div className={`alert alert--${error.level}`}>{error.text}</div>
@@ -1592,7 +1614,7 @@ export function App() {
             <div className="statusstrip">
               {cursor ? `${cursor[1].toFixed(4)}, ${cursor[0].toFixed(4)}` : '—'} ·{' '}
               {shape
-                ? `area: ${area_km2.toFixed(2)} km² · ${shape.kind}`
+                ? `area: ${formatArea(area_km2, unit, 2)} · ${shape.kind}`
                 : 'no area selected — draw one to generate'}
             </div>
           </div>
@@ -1631,8 +1653,14 @@ export function App() {
               <div className="statsoverlay">
                 <strong>{bundle.stats.triangles.toLocaleString()}</strong> triangles ·{' '}
                 {bundle.stats.dimensions_mm.map((v) => v.toFixed(1)).join(' × ')} mm ·{' '}
-                {bundle.stats.extent_km.map((v) => v.toFixed(1)).join(' × ')} km ·{' '}
-                {bundle.stats.elevationRange_m.map((v) => v.toFixed(0)).join('–')} m · exag{' '}
+                {formatExtent(bundle.stats.extent_km[0], bundle.stats.extent_km[1], unit)} ·{' '}
+                {formatElevationRange(
+                  bundle.stats.elevationRange_m[0],
+                  bundle.stats.elevationRange_m[1],
+                  unit,
+                  '–',
+                )}{' '}
+                · exag{' '}
                 {bundle.stats.verticalExaggeration.toFixed(2)}× ·{' '}
                 <span className={bundle.validation.watertight ? 'ok' : 'bad'}>
                   Watertight: {bundle.validation.watertight ? 'Yes' : 'No'}
@@ -1646,8 +1674,36 @@ export function App() {
       </div>
 
       <footer className="attribution">
-        {BASEMAPS.find((b) => b.id === basemapId)?.attribution} · Elevation:{' '}
-        {dataset?.attribution ?? ''}
+        {/* Attribution is a licence condition, not decoration, so it keeps the
+            left of the footer to itself and the additions sit apart from it. */}
+        <span className="attribution__credit">
+          {BASEMAPS.find((b) => b.id === basemapId)?.attribution} · Elevation:{' '}
+          {dataset?.attribution ?? ''}
+        </span>
+        <span className="attribution__actions">
+          <button
+            type="button"
+            className="btn btn--link"
+            title="Units for distances and elevations. Print sizes are always millimetres."
+            onClick={() => {
+              const next: DistanceUnit = unit === 'metric' ? 'imperial' : 'metric';
+              setUnit(next);
+              writeUnit(next);
+            }}
+          >
+            {UNIT_LABEL[unit]}
+          </button>
+          {SUPPORT_URL ? (
+            <a
+              className="btn btn--link"
+              href={SUPPORT_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {SUPPORT_LABEL}
+            </a>
+          ) : null}
+        </span>
       </footer>
     </div>
   );
@@ -1689,7 +1745,15 @@ function ProgressPanel({ progress, onCancel }: { progress: Progress; onCancel: (
   );
 }
 
-function Results({ bundle, dirty }: { bundle: MeshBundle; dirty: boolean }) {
+function Results({
+  bundle,
+  dirty,
+  unit,
+}: {
+  bundle: MeshBundle;
+  dirty: boolean;
+  unit: DistanceUnit;
+}) {
   const { stats, validation, warnings } = bundle;
 
   return (
@@ -1702,7 +1766,7 @@ function Results({ bundle, dirty }: { bundle: MeshBundle; dirty: boolean }) {
         <dt>Dimensions</dt>
         <dd>{stats.dimensions_mm.map((v) => v.toFixed(1)).join(' × ')} mm</dd>
         <dt>Elevation</dt>
-        <dd>{stats.elevationRange_m.map((v) => v.toFixed(0)).join(' – ')} m</dd>
+        <dd>{formatElevationRange(stats.elevationRange_m[0], stats.elevationRange_m[1], unit)}</dd>
         <dt>Watertight</dt>
         <dd className={validation.watertight ? 'ok' : 'bad'}>
           {validation.watertight ? '✓ Yes' : '✗ No'}

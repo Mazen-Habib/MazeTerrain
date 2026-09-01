@@ -6,6 +6,7 @@
  */
 import { useState } from 'react';
 import { LAYERS, defaultWidth_m, type LayerId } from '../data/osm/tags';
+import { formatGroundLength, type DistanceUnit } from '../config/units';
 import { estimatedWidths_mm, resolveMinWidth_mm, type LayerSettings } from '../geometry/features';
 import type { LayerBuildSummary } from '../geometry/types';
 import type { PreviewSummary } from '../map/featurePreview';
@@ -28,6 +29,8 @@ interface LayersPanelProps {
   previewStale: boolean;
   onPreview: () => void;
   onChange: (id: LayerId, patch: Partial<LayerSettings>) => void;
+  /** Display units for the real-world width readout (Q14). */
+  unit: DistanceUnit;
 }
 
 const GLYPH: Record<LayerId, string> = {
@@ -58,6 +61,7 @@ export function LayersPanel({
   previewStale,
   onPreview,
   onChange,
+  unit,
 }: LayersPanelProps) {
   const [expanded, setExpanded] = useState<LayerId | null>(null);
 
@@ -359,7 +363,7 @@ export function LayersPanel({
                                 }}
                               />
                               <span className="subtype__real" title="Real-world width at this scale">
-                                {real_m >= 1 ? `${real_m.toFixed(0)} m` : `${real_m.toFixed(1)} m`}
+                                {formatGroundLength(real_m, unit)}
                               </span>
                               <button
                                 className="btn btn--link subtype__reset"

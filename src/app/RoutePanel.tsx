@@ -8,6 +8,7 @@ import { useRef, useState } from 'react';
 import type { ColorMode, CutoutSubMode } from '../geometry/types';
 import type { Route } from '../data/gpx/types';
 import { canEditVertices } from '../map/editPath';
+import { formatDistance, formatElevation, type DistanceUnit } from '../config/units';
 import { NumberField } from './NumberField';
 
 interface RoutePanelProps {
@@ -41,6 +42,8 @@ interface RoutePanelProps {
   onUpdate: (id: string, patch: Partial<Route['style']>) => void;
   onRemove: (id: string) => void;
   onFit: () => void;
+  /** Display units for ground distances. Print mm are never affected (Q14). */
+  unit: DistanceUnit;
 }
 
 /** A route's points as bare pairs, for the editability check. */
@@ -65,6 +68,7 @@ export function RoutePanel({
   onUpdate,
   onRemove,
   onFit,
+  unit,
 }: RoutePanelProps) {
   const cutout = colorMode === 'single-cutout';
   const inlay = cutout && cutoutSubMode === 'inlay';
@@ -149,9 +153,9 @@ export function RoutePanel({
                 <span className="route__body">
                   <span className="route__name">{route.name}</span>
                   <span className="route__meta">
-                    {(route.distance_m / 1000).toFixed(1)} km
+                    {formatDistance(route.distance_m, unit)}
                     {route.elevationGain_m !== null
-                      ? ` · ${route.elevationGain_m.toFixed(0)} m gain`
+                      ? ` · ${formatElevation(route.elevationGain_m, unit)} gain`
                       : ' · no elevation'}
                     {` · ${route.points.length.toLocaleString()} pts`}
                   </span>
