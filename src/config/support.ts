@@ -1,33 +1,30 @@
 /**
- * Voluntary contributions (OPEN-QUESTIONS Q2 — resolved "free + donations",
- * 2026-09-01).
+ * "Support me" (OPEN-QUESTIONS Q2 — free, 2026-09-01).
  *
- * MazeTerrain is free. It has no accounts, no payments, no quota tracking and
- * no backend, and the decision to stay that way is what keeps Esri's
- * non-commercial imagery terms usable and keeps the architecture client-side.
+ * Peakora is free. No accounts, no payments, no quota tracking, no backend —
+ * which is what keeps Esri's non-commercial imagery terms usable and keeps the
+ * architecture entirely client-side.
  *
- * So this is a LINK and nothing more. The app never sees a card number, never
- * collects a billing detail, and never renders a payment form — the hosted
- * platform does all of that on its own domain. That is the entire reason this
- * approach costs nothing to secure: there is no payment surface here to attack.
+ * **No donation platform.** The owner decided against one on 2026-09-02: every
+ * candidate turned on whether it could pay out to their country, and none of
+ * that is worth solving to run a link. This points at their own page instead,
+ * which costs nothing, needs no account anywhere, and can be repointed at a
+ * funding platform later by changing one string.
  *
- * ## To turn it on
- *
- * Set `SUPPORT_URL` to the page's address. Until it is set the footer link does
- * not render at all, because a "Support this project" button that 404s is worse
- * than no button.
- *
- * The binding constraint on which platform is not the fee — it is whether the
- * platform can pay OUT to your country. Check that first, before making an
- * account anywhere. See the notes in `docs/01-project-overview.md#funding`.
+ * The app therefore has no payment surface at all — it never sees a card
+ * number, never collects a billing detail, never renders a form. That is not a
+ * security measure that had to be designed; it is a consequence of the link
+ * being a link.
  */
-export const SUPPORT_URL: string | null = null;
+
+/** Where "Support me" goes. Null hides the link entirely. */
+export const SUPPORT_URL: string | null = 'https://www.instagram.com/peakpkofficial';
 
 /**
  * What the link says.
  *
- * Not "Donate": this is a tool someone is using, and the ask should read as an
- * offer rather than a toll. No modal, no interstitial, no nag after the third
- * export — one quiet link in the footer beside the attribution.
+ * Not "Donate", which asks for money the page does not take. One quiet link in
+ * the footer beside the attribution: no modal, no interstitial, no nag after
+ * the third export. A tool that begs is a tool people stop opening.
  */
-export const SUPPORT_LABEL = 'Support this project';
+export const SUPPORT_LABEL = 'Support me';

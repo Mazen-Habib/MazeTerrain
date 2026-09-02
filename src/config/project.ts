@@ -34,8 +34,18 @@ export type Settings = Omit<GenerateConfig, 'bbox'>;
  */
 export const PROJECT_FORMAT = 1;
 
+/**
+ * The `app` field, and why it accepts two values.
+ *
+ * The project was renamed from MazeTerrain to Peakora on 2026-09-02. New files
+ * say `peakora`; files written before that say `mazeterrain` and must keep
+ * opening, because a rename is a decision about a name and not a reason to
+ * invalidate someone's saved work.
+ */
+export type AppId = 'peakora' | 'mazeterrain';
+
 export interface ProjectFile {
-  app: 'mazeterrain';
+  app: AppId;
   format: number;
   savedAt: string;
   /** What the area is called in the UI. Cosmetic, but it is what the user named it. */
@@ -320,7 +330,7 @@ export function serialiseProject(input: {
   routes: Route[];
 }): string {
   const file: ProjectFile = {
-    app: 'mazeterrain',
+    app: 'peakora',
     format: PROJECT_FORMAT,
     savedAt: new Date().toISOString(),
     areaLabel: input.areaLabel,
@@ -338,25 +348,25 @@ export function parseProject(text: string): ProjectFile {
   try {
     raw = JSON.parse(text);
   } catch {
-    throw new ProjectError('That is not a MazeTerrain project — the file is not valid JSON.');
+    throw new ProjectError('That is not a Peakora project — the file is not valid JSON.');
   }
 
-  if (!isObject(raw) || raw.app !== 'mazeterrain') {
+  if (!isObject(raw) || (raw.app !== 'peakora' && raw.app !== 'mazeterrain')) {
     throw new ProjectError(
-      'That file is not a MazeTerrain project. Look for one saved with "Save project".',
+      'That file is not a Peakora project. Look for one saved with "Save project".',
     );
   }
 
   const format = num(raw.format, 0);
   if (format > PROJECT_FORMAT) {
     throw new ProjectError(
-      `This project was saved by a newer version of MazeTerrain (format ${format}, ` +
+      `This project was saved by a newer version of Peakora (format ${format}, ` +
         `this build reads ${PROJECT_FORMAT}). Update, or re-save it from the version that wrote it.`,
     );
   }
 
   return {
-    app: 'mazeterrain',
+    app: 'peakora',
     format,
     savedAt: str(raw.savedAt, ''),
     areaLabel: str(raw.areaLabel, 'Saved project'),
@@ -428,6 +438,14 @@ export function decodeHash(hash: string): HashState | null {
 
 // --- named presets ---------------------------------------------------------
 
+/**
+ * Deliberately still the old name after the 2026-09-02 rename.
+ *
+ * This is a browser storage key, not a label — nobody sees it, and changing it
+ * silently discards every preset the user has saved. A cosmetic rename is not
+ * worth losing someone's work over. Same reasoning as the IndexedDB name in
+ * `src/data/idb.ts` and the units key in `src/config/units.ts`.
+ */
 const PRESET_KEY = 'mazeterrain.presets.v1';
 
 export interface NamedPreset {

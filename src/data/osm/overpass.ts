@@ -30,9 +30,28 @@ import { idbGet, idbPut, OSM_STORE } from '../idb';
  * These are other people's machines: the sequential fetch and the gap between
  * tiles below are what keep this a polite client on all of them.
  */
+/**
+ * Overpass instances, in preference order.
+ *
+ * **Every entry must serve the whole planet.** A regional mirror returns a
+ * perfectly valid empty response for the rest of the world, which the app then
+ * reports as "no roads found" over a city with three motorways. That happened
+ * with `overpass.osm.ch`, chosen after testing it over Zermatt — which is in
+ * Switzerland. See `08-pitfalls.md#a-mirror-that-lies-beats-a-mirror-that-fails`.
+ *
+ * **Every entry must send CORS headers**, or it cannot be used from a browser
+ * at all. Verified 2026-09-02 against both Switzerland and Pakistan.
+ *
+ * `kumi.systems` was removed the same day: its `/api/status` announces
+ * `overpass.private.coffee`, so the two were **one backend listed twice**.
+ * Believing that was redundancy is how the list looked three deep while being
+ * two — and on the day both were returning HTTP 500, the "failover" was one
+ * unreachable instance and one broken one.
+ */
 export const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
 ];
 
@@ -49,9 +68,35 @@ export const OVERPASS_ENDPOINTS = [
  */
 let preferredEndpoint = 0;
 
+/**
+ * When each instance is worth trying again, as epoch ms.
+ *
+ * An instance that just refused us is not worth the timeout on the next tile,
+ * and a 25-second hang paid fifty-one times is most of an hour spent waiting
+ * for the same answer.
+ */
+const endpointCooldown = new Map<string, number>();
+
+/** How long an instance sits out after failing. */
+const COOLDOWN_MS = 60_000;
+
+function healthyEndpoints(now = Date.now()): string[] {
+  const live = OVERPASS_ENDPOINTS.filter((e) => (endpointCooldown.get(e) ?? 0) <= now);
+  // If everything is cooling down, try everything anyway — a stale cooldown is
+  // no reason to fail a build outright.
+  return live.length > 0 ? live : OVERPASS_ENDPOINTS;
+}
+
+/** Exposed for tests, which must not inherit a cooldown from an earlier case. */
+export function resetEndpointHealth(): void {
+  endpointCooldown.clear();
+  preferredEndpoint = 0;
+}
+
 const TIMEOUT_S = 60;
-/** At least one attempt per endpoint, plus one for a transient failure. */
-const MAX_ATTEMPTS = OVERPASS_ENDPOINTS.length + 1;
+// There is no MAX_ATTEMPTS constant any more: the attempt budget is one per
+// endpoint that is not cooling down, plus one, and that set changes as
+// instances fail and recover.
 const BASE_BACKOFF_MS = 1500;
 
 /**
@@ -114,13 +159,20 @@ const TILE_GAP_MS = 1500;
 /**
  * What one tile query typically costs, for the up-front estimate only.
  *
- * Measured across the Islamabad runs in `09-roadmap.md`: 12 tiles in 37.9 s and
- * 25 in 118.4 s, which net of the gap is roughly 1.7 s and 3.2 s per query. The
- * higher figure, because an estimate that runs under is worse than one that
- * runs over — someone told four minutes and kept waiting nine concludes it has
- * hung.
+ * Islamabad, healthy instances: 12 tiles in 37.9 s and 25 in 118.4 s, so ~1.7 s
+ * and ~3.2 s per query net of the gap. **Muzaffargarh, 2026-09-02, with the
+ * reference instance refusing us and the run failing over to mirrors: 51 tiles
+ * in about 27 minutes — near 30 s per area.**
+ *
+ * Those are an order of magnitude apart and the difference is not the area, it
+ * is whether the servers are answering. No constant predicts that. 6 s is set
+ * between the two: roughly double a healthy run, so the figure is honest when
+ * things are well and still visibly wrong when they are not. The copy alongside
+ * it says "longer if OpenStreetMap is busy" for that reason — an estimate that
+ * runs under is worse than one that runs over, because someone told four
+ * minutes and still waiting at twenty concludes it has hung and cancels.
  */
-const TYPICAL_QUERY_MS = 3200;
+const TYPICAL_QUERY_MS = 6000;
 
 /**
  * How long the whole fetch may spend WAITING for Overpass slots.
@@ -409,6 +461,15 @@ export interface FetchOsmOptions {
   /** Injected in tests so the suite does not sit through a rate-limit wait. */
   rateLimitBackoffMs?: number;
   /**
+   * Which instance to try FIRST for this query.
+   *
+   * A tiled fetch passes the tile index, so consecutive tiles start at
+   * different mirrors. Aiming every request of a fifty-tile run at one instance
+   * is what gets that instance to stop answering — which is precisely how a
+   * 51-area build died with `overpass-api.de` refusing the connection outright.
+   */
+  startAt?: number;
+  /**
    * Which instance answered, reported on every success.
    *
    * So an empty result can be traced to a server rather than believed. A
@@ -480,10 +541,16 @@ async function fetchOne(
   const backoff = options.backoffMs ?? BASE_BACKOFF_MS;
   let lastError: unknown;
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    // Start at whichever instance last worked, then walk the rest.
-    const index = (preferredEndpoint + attempt) % OVERPASS_ENDPOINTS.length;
-    const endpoint = OVERPASS_ENDPOINTS[index];
+  // Walk only the instances not currently cooling down, starting at the one
+  // the caller nominated. `startAt` is how a tiled fetch spreads its requests:
+  // fifty-one tiles all aimed at one instance is what earns a block, and the
+  // reference instance blocking us is exactly how this run failed.
+  const live = healthyEndpoints();
+  const offset = options.startAt ?? preferredEndpoint;
+
+  for (let attempt = 0; attempt < live.length + 1; attempt++) {
+    const index = (offset + attempt) % live.length;
+    const endpoint = live[index];
     if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
     try {
@@ -496,7 +563,7 @@ async function fetchOne(
       });
 
       if (res.status === 429 || res.status === 504) {
-        if (attempt === MAX_ATTEMPTS - 1) {
+        if (attempt === live.length) {
           throw new OverpassError(
             `Overpass returned HTTP ${res.status}`,
             `OpenStreetMap is rate-limiting requests (HTTP ${res.status}). Wait a minute ` +
@@ -524,24 +591,28 @@ async function fetchOne(
         throw new OverpassError('Overpass response had no elements array', 'Malformed response from OpenStreetMap.');
       }
 
-      preferredEndpoint = index;
+      endpointCooldown.delete(endpoint);
+      preferredEndpoint = OVERPASS_ENDPOINTS.indexOf(endpoint);
       options.onEndpoint?.(new URL(endpoint).hostname);
       void writeCache(key, data);
       return data;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      if (err instanceof OverpassError && err.status !== undefined && attempt === MAX_ATTEMPTS - 1) {
+      // Sit this instance out for a minute rather than paying its timeout on
+      // every one of the next fifty tiles.
+      endpointCooldown.set(endpoint, Date.now() + COOLDOWN_MS);
+      if (err instanceof OverpassError && err.status !== undefined && attempt === live.length) {
         throw err;
       }
       lastError = err;
-      if (attempt < MAX_ATTEMPTS - 1) {
+      if (attempt < live.length) {
         await sleep(backoff * Math.pow(2, attempt), options.signal);
       }
     }
   }
 
   throw new OverpassError(
-    `Overpass failed after ${MAX_ATTEMPTS} attempts: ${String(lastError)}`,
+    `Overpass failed after ${live.length + 1} attempts: ${String(lastError)}`,
     `Could not reach OpenStreetMap after several attempts. The terrain will still ` +
       `generate — turn the feature layers off to skip this step.`,
   );
@@ -680,7 +751,14 @@ export async function fetchOsm(
     let cacheHit = false;
     try {
       responses.push(
-        await fetchOne(tiles[index], layers, { ...rest, onCacheHit: () => (cacheHit = true) }),
+        await fetchOne(tiles[index], layers, {
+          ...rest,
+          // Spread the run across instances rather than aiming all of it at
+          // one. Fifty-one requests to a single mirror is what gets that
+          // mirror to stop answering.
+          startAt: index,
+          onCacheHit: () => (cacheHit = true),
+        }),
       );
       consecutiveFailures = 0;
       done++;

@@ -2,7 +2,7 @@
  * FIT -> route points.
  *
  * Garmin and Wahoo devices write `.fit` natively. Today a user with a watch has
- * to convert the file somewhere else before MazeTerrain will look at it, which
+ * to convert the file somewhere else before Peakora will look at it, which
  * is exactly the friction a Strava import was supposed to remove — and Strava's
  * 2026 developer tiers put that out of reach (OPEN-QUESTIONS Q4). Reading the
  * file directly needs nobody's permission and helps people who never touch

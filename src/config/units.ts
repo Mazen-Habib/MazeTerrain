@@ -30,6 +30,7 @@ const METRES_PER_MILE = 1609.344;
 const METRES_PER_FOOT = 0.3048;
 const KM2_PER_SQ_MILE = 2.589988110336;
 
+/** Pre-rename key, kept so the preference survives. See `project.ts`. */
 const STORAGE_KEY = 'mazeterrain.units';
 
 /**

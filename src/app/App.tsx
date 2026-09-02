@@ -66,6 +66,7 @@ import {
   type DistanceUnit,
 } from '../config/units';
 import { EstimatePanel, defaultFilamentSettings, type FilamentSettings } from './EstimatePanel';
+import { printerProfile } from '../export/estimate';
 import { LayersPanel } from './LayersPanel';
 import { ProjectPanel } from './ProjectPanel';
 import {
@@ -253,6 +254,36 @@ export function App() {
     const { bbox: _bbox, ...rest } = defaultConfig(PRESETS[0].bbox);
     return rest;
   });
+
+  /**
+   * Which printer is selected, from the bed size.
+   *
+   * The bed size is what the config stores, so this reads back through it —
+   * which means the two Bambu machines are indistinguishable, both being
+   * 256 x 256. That costs nothing: they share Bambu Studio's slicer profile
+   * anyway, so the estimate is identical either way.
+   */
+  const printerId = useMemo(() => {
+    const bed = settings.bedSize_mm;
+    if (!bed) return null;
+    return (
+      BED_PRESETS.find((b) => b.size && b.size[0] === bed[0] && b.size[1] === bed[1])?.id ?? null
+    );
+  }, [settings.bedSize_mm]);
+
+  /**
+   * Pick up the selected printer's stock slicer settings.
+   *
+   * The owner asked for the estimate to use printer defaults rather than ask
+   * for numbers. Changing printer therefore RESETS walls, solid layers, infill
+   * and speed — anything typed in for the old printer described a different
+   * machine. Price and material are deliberately not touched: those are facts
+   * about the spool on the shelf, not about the printer.
+   */
+  useEffect(() => {
+    const profile = printerProfile(printerId);
+    setFilament((current) => ({ ...current, ...profile }));
+  }, [printerId]);
   const [autoResolution, setAutoResolution] = useState(true);
   const [routes, setRoutes] = useState<Route[]>([]);
 
@@ -824,7 +855,7 @@ export function App() {
       */}
       <div className="smallscreen" role="alert">
         <div className="smallscreen__card">
-          <h2>MazeTerrain needs a bigger screen</h2>
+          <h2>Peakora needs a bigger screen</h2>
           <p>
             Choosing an area and setting up a print means drawing on a map and working
             through a column of settings. Both are genuinely bad on a phone, so rather
@@ -836,7 +867,7 @@ export function App() {
 
       <header className="topbar">
         <h1>
-          MazeTerrain <span className="topbar__phase">Phase 2</span>
+          Peakora <span className="topbar__phase">Phase 2</span>
         </h1>
 
         <div className="viewtoggle" role="tablist">
@@ -1231,6 +1262,9 @@ export function App() {
             </div>
 
             <EstimatePanel
+              printerLabel={
+                BED_PRESETS.find((b) => b.id === printerId)?.label.replace(/ \(.*/, '') ?? null
+              }
               measures={bundle?.measures ?? null}
               settings={filament}
               onChange={(patch) => setFilament((c) => ({ ...c, ...patch }))}
@@ -1456,16 +1490,7 @@ export function App() {
               <select
                 id="bed"
                 className="select"
-                value={
-                  config.bedSize_mm
-                    ? (BED_PRESETS.find(
-                        (b) =>
-                          b.size &&
-                          b.size[0] === config.bedSize_mm![0] &&
-                          b.size[1] === config.bedSize_mm![1],
-                      )?.id ?? 'none')
-                    : 'none'
-                }
+                value={printerId ?? 'none'}
                 onChange={(e) =>
                   update({
                     bedSize_mm: BED_PRESETS.find((b) => b.id === e.target.value)?.size ?? null,
@@ -1595,7 +1620,7 @@ export function App() {
                     <dd>
                       {osmPlan.single
                         ? '1 request'
-                        : `${osmPlan.tiles} requests · about ${fetchTimeLabel(osmPlan.seconds)}`}
+                        : `${osmPlan.tiles} requests · about ${fetchTimeLabel(osmPlan.seconds)}, longer if OpenStreetMap is busy`}
                       {osmPlan.tiles >= HUGE_FETCH_TILES ? (
                         <span className="badge badge--huge">too many</span>
                       ) : osmPlan.seconds >= SLOW_FETCH_S ? (

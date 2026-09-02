@@ -9,7 +9,7 @@ Read this file first, in full, before doing anything else in this repo.
 ## 1. What this repo is
 
 A **specification pack**, not a codebase. The docs describe a browser app called
-**MazeTerrain** that converts a GPX route + a map selection into a 3D-printable mesh.
+**Peakora** that converts a GPX route + a map selection into a 3D-printable mesh.
 
 Your job is to turn this spec into working software, incrementally, while keeping the
 spec updated as reality diverges from it.

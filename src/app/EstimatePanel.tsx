@@ -34,6 +34,12 @@ const MATERIALS: Array<{ id: string; label: string; density_g_cm3: number }> = [
 ];
 
 interface EstimatePanelProps {
+  /**
+   * The printer whose stock slicer settings are in force, or null for the
+   * generic fallback. Shown so the numbers are attributable — an estimate with
+   * no stated assumptions is a number people either over-trust or ignore.
+   */
+  printerLabel: string | null;
   /** Per-part volume and area from the last build, or null before one. */
   measures: PartMeasure[] | null;
   settings: FilamentSettings;
@@ -45,6 +51,7 @@ interface EstimatePanelProps {
 }
 
 export function EstimatePanel({
+  printerLabel,
   measures,
   settings,
   onChange,
@@ -75,6 +82,11 @@ export function EstimatePanel({
   return (
     <div className="field">
       <label className="field__label">Filament estimate</label>
+      <p className="field__hint">
+        {printerLabel
+          ? `${printerLabel} stock profile — ${(settings.infill * 100).toFixed(0)}% infill, ${settings.wallLoops} walls, ${layerHeight_mm} mm layers.`
+          : `Generic profile — ${(settings.infill * 100).toFixed(0)}% infill, ${settings.wallLoops} walls, ${layerHeight_mm} mm layers. Pick a printer above to use its defaults.`}
+      </p>
 
       <dl className="estimate">
         <div className="estimate__row estimate__row--lead">

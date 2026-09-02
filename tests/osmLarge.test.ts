@@ -11,12 +11,14 @@
  * Waiting a stated length is politeness; retrying blind is what gets an IP
  * refused, and this app has done that to itself before.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchOsm,
   OverpassError,
   parseSlotWait,
   planOsmTiles,
+  resetEndpointHealth,
+  OVERPASS_ENDPOINTS,
 } from '../src/data/osm/overpass';
 import { boxIntersectsRing } from '../src/geometry/selection';
 
@@ -31,6 +33,9 @@ const statusText = (text: string) =>
 
 /** Backoffs and gaps to nothing, so the suite does not sit through real waits. */
 const FAST = { backoffMs: 1, tileGapMs: 0, rateLimitBackoffMs: 1 };
+
+/** Endpoint health is module state and leaks between cases. */
+beforeEach(resetEndpointHealth);
 
 describe('reading the slot status', () => {
   it('reads free slots as no wait', () => {
@@ -233,5 +238,91 @@ describe('boxIntersectsRing', () => {
   /** A degenerate outline must not silently drop the whole map. */
   it('keeps everything when the ring is not a polygon', () => {
     expect(boxIntersectsRing({ west: 20, south: 20, east: 30, north: 30 }, [[0, 0]])).toBe(true);
+  });
+});
+
+/**
+ * The endpoint list, after 2026-09-02.
+ *
+ * That day a 51-area build died with every instance unavailable, and the list
+ * turned out to be weaker than it read: `overpass.kumi.systems` and
+ * `overpass.private.coffee` announce the same backend, so three entries were
+ * two servers. Both were returning HTTP 500 at the time, and the reference
+ * instance was refusing the connection outright.
+ */
+describe('the endpoint list', () => {
+  it('has no duplicate hosts', () => {
+    const hosts = OVERPASS_ENDPOINTS.map((e) => new URL(e).hostname);
+    expect(new Set(hosts).size).toBe(hosts.length);
+  });
+
+  /**
+   * kumi.systems is gone specifically because its `/api/status` announces
+   * `overpass.private.coffee`. Listing both looked like redundancy and was not.
+   */
+  it('does not list both halves of the private.coffee pair', () => {
+    const hosts = OVERPASS_ENDPOINTS.map((e) => new URL(e).hostname);
+    expect(hosts).not.toContain('overpass.kumi.systems');
+  });
+
+  it('has enough independent instances to be worth failing over to', () => {
+    expect(OVERPASS_ENDPOINTS.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('points every entry at an interpreter over https', () => {
+    for (const e of OVERPASS_ENDPOINTS) {
+      expect(e).toMatch(/^https:\/\//);
+      expect(e).toMatch(/\/interpreter$/);
+    }
+  });
+});
+
+describe('spreading a tiled run across instances', () => {
+  /**
+   * Fifty-one requests aimed at one mirror is what gets that mirror to stop
+   * answering — which is exactly how the real build failed, with
+   * `overpass-api.de` refusing the connection. Consecutive tiles must start at
+   * different instances.
+   */
+  it('does not send every tile to the same instance', async () => {
+    const seen = new Set<string>();
+    const fetchImpl = vi.fn(async (url: string) => {
+      seen.add(new URL(String(url)).hostname);
+      return ok({ elements: [{ type: 'way', id: 1 }] });
+    });
+
+    await fetchOsm(WIDE, ['roads'], {
+      ...FAST,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
+  /**
+   * An instance that just failed sits out for a cooldown. Without it, a dead
+   * instance is retried on every one of the next fifty tiles, and a 25-second
+   * connect timeout paid fifty times is most of an hour of waiting.
+   */
+  it('stops going back to an instance that just failed', async () => {
+    const dead = OVERPASS_ENDPOINTS[0];
+    let deadCalls = 0;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (String(url) === dead) {
+        deadCalls++;
+        throw new TypeError('Failed to fetch');
+      }
+      return ok({ elements: [{ type: 'way', id: 1 }] });
+    });
+
+    await fetchOsm(WIDE, ['roads'], {
+      ...FAST,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const tiles = fetchImpl.mock.calls.length;
+    expect(tiles).toBeGreaterThan(5);
+    // Hit at most a couple of times before being benched, not once per tile.
+    expect(deadCalls).toBeLessThanOrEqual(2);
   });
 });

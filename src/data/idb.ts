@@ -12,6 +12,13 @@
  * See docs/08-pitfalls.md#indexeddb-version-deadlock.
  */
 
+/**
+ * Still the pre-rename name, on purpose (2026-09-02).
+ *
+ * Renaming the database orphans every cached DEM and OSM tile — which after
+ * the large-selection work is worth real minutes to a user, and costs the
+ * public Overpass instance real requests to rebuild. The name is invisible.
+ */
 const DB_NAME = 'mazeterrain';
 
 /** Bump this, and add the store below. Never open this database anywhere else. */

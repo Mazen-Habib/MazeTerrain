@@ -23,7 +23,7 @@ describe('writeBinarySTL', () => {
   it('writes attribution into the 80-byte header', () => {
     const buffer = writeBinarySTL([partFrom(positions, indices)]);
     const header = new TextDecoder().decode(new Uint8Array(buffer, 0, 80)).replace(/\0+$/, '');
-    expect(header).toContain('MazeTerrain');
+    expect(header).toContain('Peakora');
     expect(header).toContain('OpenStreetMap');
     expect(stlHeader().length).toBeLessThanOrEqual(80);
   });
@@ -64,7 +64,7 @@ describe('writeBinarySTL', () => {
   });
 
   it('keeps a non-ASCII header inside 80 bytes', () => {
-    const buffer = writeBinarySTL([partFrom(positions, indices)], '© MazeTerrain — test');
+    const buffer = writeBinarySTL([partFrom(positions, indices)], '© Peakora — test');
     expect(buffer.byteLength).toBe(80 + 4 + 50);
   });
 });
@@ -72,11 +72,11 @@ describe('writeBinarySTL', () => {
 describe('stlFilename', () => {
   it('follows the documented convention', () => {
     const name = stlFilename('islamabad-margalla', 100, new Date(Date.UTC(2026, 7, 17)));
-    expect(name).toBe('mazeterrain_islamabad-margalla_100mm_20260817.stl');
+    expect(name).toBe('peakora_islamabad-margalla_100mm_20260817.stl');
   });
 
   it('keeps a fractional size readable', () => {
     const name = stlFilename('matterhorn', 74.8, new Date(Date.UTC(2026, 7, 17)));
-    expect(name).toBe('mazeterrain_matterhorn_74.8mm_20260817.stl');
+    expect(name).toBe('peakora_matterhorn_74.8mm_20260817.stl');
   });
 });

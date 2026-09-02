@@ -90,7 +90,7 @@ const LINE_WIDTH_RATIO = 1.125;
  * is a ceiling the printer only reaches on long straight runs. A terrain model
  * is nearly all short segments, so it spends much of its life accelerating.
  *
- * **Calibrated 2026-08-30** against a sliced MazeTerrain model — a 23.13 g
+ * **Calibrated 2026-08-30** against a sliced Peakora model — a 23.13 g
  * city-and-route disc with the route as a separate insert. Its per-line-type
  * breakdown:
  *
@@ -115,6 +115,54 @@ const TRAVEL_FACTOR = 1.431;
 
 /** Faces steeper than this count as walls rather than as solid top or bottom. */
 const WALL_COS_LIMIT = Math.cos((50 * Math.PI) / 180);
+
+/**
+ * Stock slicer settings, per printer (F10).
+ *
+ * The owner asked for the estimate to just use each printer's defaults rather
+ * than ask for them, which is right: almost nobody changes wall count or solid
+ * layers, and being asked for numbers you have never looked at is how an
+ * estimate gets abandoned.
+ *
+ * These are the standard 0.2 mm / 0.4 mm nozzle PLA profiles as each vendor
+ * ships them. The differences are small and real: Cura's stock infill is 20%
+ * where Bambu Studio and PrusaSlicer use 15%, and Cura's 0.8 mm top and bottom
+ * shell is four layers where the others use more.
+ *
+ * **`speed_mm_s` is the weak number and always will be.** It stands in for a
+ * whole acceleration profile with one figure, so treat the time as an
+ * order-of-magnitude answer — the mass and the cost are arithmetic on volume
+ * and are far more trustworthy. The X1 and A1 share an entry because they share
+ * Bambu Studio's profiles; guessing a difference we cannot measure would be
+ * false precision, and they are indistinguishable here anyway, both being
+ * 256 x 256.
+ */
+export interface PrinterProfile {
+  wallLoops: number;
+  solidLayers: number;
+  infill: number;
+  speed_mm_s: number;
+}
+
+export const PRINTER_PROFILES: Record<string, PrinterProfile> = {
+  'bambu-x1': { wallLoops: 2, solidLayers: 5, infill: 0.15, speed_mm_s: 150 },
+  'bambu-a1': { wallLoops: 2, solidLayers: 5, infill: 0.15, speed_mm_s: 150 },
+  'prusa-mk4': { wallLoops: 2, solidLayers: 5, infill: 0.15, speed_mm_s: 120 },
+  'prusa-mini': { wallLoops: 2, solidLayers: 5, infill: 0.15, speed_mm_s: 60 },
+  'ender-3': { wallLoops: 2, solidLayers: 4, infill: 0.2, speed_mm_s: 50 },
+};
+
+/** The fallback for "Don't check", and for any printer not listed. */
+export const GENERIC_PROFILE: PrinterProfile = {
+  wallLoops: 2,
+  solidLayers: 4,
+  infill: 0.15,
+  speed_mm_s: 60,
+};
+
+export function printerProfile(printerId: string | null): PrinterProfile {
+  return (printerId && PRINTER_PROFILES[printerId]) || GENERIC_PROFILE;
+}
 
 export function defaultFilamentProfile(
   layerHeight_mm: number,

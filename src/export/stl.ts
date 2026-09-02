@@ -11,7 +11,7 @@ const TRIANGLE_BYTES = 50;
 
 /** The 80-byte header is the attribution slot. Use it. */
 export function stlHeader(version = '0.1.0'): string {
-  return `MazeTerrain ${version} | (c) OpenStreetMap contributors | Copernicus DEM`;
+  return `Peakora ${version} | (c) OpenStreetMap contributors | Copernicus DEM`;
 }
 
 /**
@@ -109,5 +109,5 @@ export function stlFilename(placeSlug: string, modelWidth_mm: number, date = new
   const m = String(date.getUTCMonth() + 1).padStart(2, '0');
   const d = String(date.getUTCDate()).padStart(2, '0');
   const size = Number.isInteger(modelWidth_mm) ? modelWidth_mm : modelWidth_mm.toFixed(1);
-  return `mazeterrain_${placeSlug}_${size}mm_${y}${m}${d}.stl`;
+  return `peakora_${placeSlug}_${size}mm_${y}${m}${d}.stl`;
 }

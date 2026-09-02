@@ -248,6 +248,65 @@ describe('the cases that break parsers', () => {
   });
 });
 
+/**
+ * The layout of a real file, reproduced exactly.
+ *
+ * Taken from the Garmin FIT SDK's `Activity.fit` after decoding it: global 20,
+ * **big-endian**, one developer field, and fields ordered
+ * `253, 5, 6, 3, 4, 7, 2, 0, 1` — timestamp, distance, speed, heart rate,
+ * cadence, power, altitude, and the two position fields LAST.
+ *
+ * Every one of those is a way to get it wrong. Position at the end means a
+ * parser that mis-sizes any earlier field reads coordinates from the wrong
+ * bytes; the developer field shifts every record; and the whole file being
+ * big-endian is not the exception the spec makes it sound.
+ */
+describe('a real-world record layout', () => {
+  const REAL_FIELDS: Field[] = [
+    { number: 253, size: 4, baseType: T_UINT32 }, // timestamp
+    { number: 5, size: 4, baseType: T_UINT32 }, // distance, cm
+    { number: 6, size: 2, baseType: T_UINT16 }, // speed, mm/s
+    { number: 3, size: 1, baseType: T_UINT8 }, // heart rate
+    { number: 4, size: 1, baseType: T_UINT8 }, // cadence
+    { number: 7, size: 2, baseType: T_UINT16 }, // power
+    { number: 2, size: 2, baseType: T_UINT16 }, // altitude
+    { number: 0, size: 4, baseType: T_SINT32 }, // position_lat
+    { number: 1, size: 4, baseType: T_SINT32 }, // position_long
+  ];
+
+  const realRecord = (lat: number, lon: number, alt: number, ts: number): number[] => [
+    0,
+    ...int(ts, 4, false),
+    ...int(0, 4, false),
+    ...int(1000, 2, false),
+    130,
+    80,
+    ...int(150, 2, false),
+    ...int(alt, 2, false),
+    ...int(lat, 4, false),
+    ...int(lon, 4, false),
+    ...int(0, 4, false), // the developer field
+  ];
+
+  it('decodes positions that sit last, behind a developer field, big-endian', () => {
+    const file = fitFile([
+      ...definition(0, 20, REAL_FIELDS, {
+        littleEndian: false,
+        developerFields: [{ size: 4 }],
+      }),
+      ...realRecord(ZERMATT_LAT_SEMI, ZERMATT_LON_SEMI, ALT_1620_RAW, 995_749_880),
+      ...realRecord(ZERMATT_LAT_SEMI + 100_000, ZERMATT_LON_SEMI, ALT_1620_RAW + 50, 995_749_881),
+    ]);
+
+    const points = parseFit(file, 'Activity.fit');
+    expect(points).toHaveLength(2);
+    expect(points[0].lat).toBeCloseTo(46.0207, 4);
+    expect(points[0].lon).toBeCloseTo(7.7491, 4);
+    expect(points[0].ele).toBeCloseTo(1620, 6);
+    expect(points[1].ele).toBeCloseTo(1630, 6);
+  });
+});
+
 describe('files that are not what they claim', () => {
   it('rejects a renamed GPX with a message that says so', () => {
     const xml = new TextEncoder().encode('<?xml version="1.0"?><gpx><trk/></gpx>'.padEnd(64, ' '));

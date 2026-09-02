@@ -1,4 +1,4 @@
-# MazeTerrain — Project Reference Repository
+# Peakora — Project Reference Repository
 
 > **This repo contains no code yet.** It is the specification and context pack that
 > Claude Code (or any other agent/developer) reads *before* writing a single line.

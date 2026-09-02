@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildingHeight_m,
   buildingMinHeight_m,
@@ -17,6 +17,7 @@ import {
   isCacheable,
   OverpassError,
   OVERPASS_ENDPOINTS,
+  resetEndpointHealth,
   tileBBox,
 } from '../src/data/osm/overpass';
 import { assembleRings, isClosed, normalise } from '../src/data/osm/normalise';
@@ -181,6 +182,11 @@ describe('extractKey', () => {
 });
 
 describe('fetchOsm', () => {
+  // Endpoint health is module state: an instance a previous case marked dead is
+  // still cooling down here, which silently shortens the walk the next case is
+  // asserting on.
+  beforeEach(resetEndpointHealth);
+
   const ok = (body: unknown) =>
     ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
 

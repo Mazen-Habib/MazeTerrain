@@ -9,10 +9,25 @@ alone.** Format: question, why it matters, options, owner, status.
 
 ## Product
 
-### Q1 — Project name
-`MazeTerrain` is the working title from the reference PDF. Is it final?
-**Why it matters:** domain, package name, export filenames, 3MF metadata strings.
-**Status:** open · **Owner:** project owner
+### Q1 — Project name — **resolved 2026-09-02: Peakora**
+Was `MazeTerrain`, the working title from the reference PDF. Renamed throughout on
+2026-09-02.
+
+**What changed:** every user-visible string, the page title, the package name, export
+filenames (`peakora_<place>_<size>mm_<date>.stl`), the STL header and the 3MF
+`Application` metadata.
+
+**What deliberately did NOT change**, because these are storage identifiers rather than
+labels and nobody sees them:
+
+- the IndexedDB name (`mazeterrain`) — renaming it orphans every cached DEM and OSM tile,
+  which costs the user minutes and the public Overpass instance real requests to rebuild;
+- the preset `localStorage` key — renaming it silently discards saved presets;
+- the units preference key, for the same reason.
+
+The `.mzt` project file now writes `app: "peakora"` and **accepts either value on read**, so
+projects saved before the rename still open. A rename is a decision about a name, not a
+reason to invalidate saved work.
 
 ### Q2 — Free vs paid — **resolved 2026-09-01: free, with voluntary contributions**
 Owner: "ditch the paid one, add contribution for now."
@@ -21,11 +36,15 @@ No size cap, no paid tier, no fulfilment gate. What this buys, and it is the rea
 decision was easy:
 
 - **No accounts, no payments, no quota tracking, no backend.** The paid option was the
-  only thing that required any of them. MazeTerrain stays entirely client-side.
+  only thing that required any of them. Peakora stays entirely client-side.
 - **Esri World Imagery becomes usable** under its non-commercial terms, which unblocks Q6.
-- **No payment surface to secure.** Contributions are an outbound link to a hosted
-  platform; the app never sees a card number or a billing detail. See
-  `src/config/support.ts`.
+- **No payment surface to secure.** The footer carries a single outbound "Support me"
+  link; the app never sees a card number or a billing detail. See `src/config/support.ts`.
+
+**Updated 2026-09-02: no donation platform.** Every candidate turned on whether it could
+pay out to the owner's country, and that is not worth solving to run a link. The link
+points at the owner's own page (`instagram.com/peakpkofficial`) and can be repointed at a
+funding platform later by changing one string.
 
 The cost side is unchanged and still real: Overpass is volunteer infrastructure and DEM
 bandwidth is not free. That is now a Q8 problem (when to self-host) rather than a pricing
@@ -187,7 +206,7 @@ reader wants hill heights in metres and one flag cannot serve both.
 *(Move items here with the decision and date when they're settled.)*
 
 ### Q15 — "Brim" naming collision — **resolved 2026-08-27**
-There is no brim in MazeTerrain. The owner: "Leave brim that is to be selected in slicer.
+There is no brim in Peakora. The owner: "Leave brim that is to be selected in slicer.
 We can use frame." A bed-adhesion brim is a slicer setting and belongs to the person
 slicing; duplicating the word for a decorative lip would only confuse them. The two
 specced controls collapse into one **Frame** with width and height — narrow gives the lip,

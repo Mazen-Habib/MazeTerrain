@@ -14,6 +14,9 @@ import {
   formatDuration,
   measurePart,
   measureParts,
+  printerProfile,
+  GENERIC_PROFILE,
+  PRINTER_PROFILES,
   type FilamentProfile,
   type PartMeasure,
 } from '../src/export/estimate';
@@ -220,5 +223,57 @@ describe('formatDuration', () => {
     expect(formatDuration(0)).toBe('—');
     expect(formatDuration(NaN)).toBe('—');
     expect(formatDuration(-1)).toBe('—');
+  });
+});
+
+/**
+ * Printer profiles (F10).
+ *
+ * The owner asked for the estimate to use each printer's defaults rather than
+ * ask for numbers. What is worth asserting is not the individual values — those
+ * are vendor facts that will drift — but that the differences are real and that
+ * an unknown printer still gets a usable answer.
+ */
+describe('printer profiles', () => {
+  it('knows every bed preset that names a real printer', () => {
+    for (const id of ['bambu-x1', 'bambu-a1', 'prusa-mk4', 'prusa-mini', 'ender-3']) {
+      expect(PRINTER_PROFILES[id], id).toBeDefined();
+    }
+  });
+
+  /** Cura ships 20% where Bambu Studio and PrusaSlicer ship 15%. */
+  it('carries the differences that actually differ', () => {
+    expect(PRINTER_PROFILES['ender-3'].infill).toBeGreaterThan(
+      PRINTER_PROFILES['bambu-x1'].infill,
+    );
+  });
+
+  /**
+   * The two Bambu machines are indistinguishable here, both being 256 x 256, so
+   * they must agree — otherwise the estimate would depend on which one the
+   * lookup happened to find first.
+   */
+  it('gives the two Bambu machines the same answer', () => {
+    expect(PRINTER_PROFILES['bambu-a1']).toEqual(PRINTER_PROFILES['bambu-x1']);
+  });
+
+  it('falls back rather than returning nothing', () => {
+    expect(printerProfile(null)).toEqual(GENERIC_PROFILE);
+    expect(printerProfile('some-printer-from-2030')).toEqual(GENERIC_PROFILE);
+  });
+
+  /** A profile has to produce a usable estimate, not just exist. */
+  it('produces a heavier estimate for the higher-infill printer', () => {
+    const part = box(40, 40, 40);
+    const base = { filamentDiameter_mm: 1.75, density_g_cm3: 1.24, pricePerKg: 20 };
+    const at = (id: string) =>
+      estimateFilament([measurePart(part)], {
+        ...base,
+        ...printerProfile(id),
+        layerHeight_mm: 0.2,
+        nozzleDiameter_mm: 0.4,
+      }).mass_g;
+
+    expect(at('ender-3')).toBeGreaterThan(at('bambu-x1'));
   });
 });

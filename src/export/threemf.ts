@@ -31,7 +31,7 @@ const DEFLATE_LEVEL = 6;
 /** Attribution is legally required, not decorative (CLAUDE.md, Data). */
 export function attributionText(version = '0.1.0'): string {
   return (
-    `Made with MazeTerrain ${version}.\n\n` +
+    `Made with Peakora ${version}.\n\n` +
     `Map data © OpenStreetMap contributors, available under the Open Database ` +
     `License (ODbL). https://www.openstreetmap.org/copyright\n\n` +
     `Elevation: Copernicus DEM © DLR e.V. 2010-2014 and © Airbus Defence and ` +
@@ -171,7 +171,7 @@ export function buildModelXml(parts: MeshPart[], options: ThreeMFOptions = {}): 
   chunks.push(
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
       `<model unit="millimeter" xml:lang="en-US" xmlns="${CORE_NS}" xmlns:m="${MATERIAL_NS}">\n` +
-      ` <metadata name="Application">MazeTerrain ${escapeXml(version)}</metadata>\n` +
+      ` <metadata name="Application">Peakora ${escapeXml(version)}</metadata>\n` +
       ` <metadata name="Description">${escapeXml(description)}</metadata>\n` +
       ' <metadata name="LicenseTerms">Map data ODbL, © OpenStreetMap contributors</metadata>\n' +
       ' <resources>\n',
