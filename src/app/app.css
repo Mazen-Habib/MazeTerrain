@@ -412,54 +412,81 @@ body {
 }
 
 /*
- * The theme switch, in the top bar.
+ * The theme switch: a real switch, not a pair of buttons.
  *
- * Built as a segmented control rather than one icon that flips: a toggle whose
- * only state indicator is which glyph it currently shows is a puzzle, and this
- * one went unfound as exactly that. Both options visible, the active one
- * marked, and it matches the Map / 3D switch beside it.
+ * It was a segmented Light | Dark control, and before that a lone icon that
+ * flipped — which went unfound, because a toggle whose only state indicator is
+ * which glyph it happens to be showing is a puzzle rather than a control.
+ *
+ * A track with a travelling knob reads as a switch at a glance, and the word
+ * beside it names the mode that is ON so there is nothing to infer. The knob
+ * sits LEFT for dark and RIGHT for light, the direction the two words already
+ * imply.
  */
 .themeswitch {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-}
-
-.themeswitch button {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 5px 10px;
+  gap: 9px;
+  padding: 3px 4px;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
-  font-weight: 500;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
 }
 
-/* An SVG is a flex item and will happily be squashed narrower than its own
-   viewBox, which crops the glyph rather than scaling it. */
-.themeswitch svg {
-  flex: 0 0 auto;
-  overflow: visible;
+.themeswitch__track {
+  position: relative;
+  display: block;
+  width: 34px;
+  height: 19px;
+  flex: 0 0 34px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
-.themeswitch button:hover:not(.themeswitch__on) {
+.themeswitch:hover .themeswitch__track {
+  border-color: var(--line-strong);
+}
+
+.themeswitch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  background: var(--text);
+  transition: transform 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Checked is "light", so the knob travels right. */
+.themeswitch[aria-checked='true'] .themeswitch__knob {
+  transform: translateX(15px);
+}
+
+.themeswitch__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  transition: color 120ms ease;
+}
+
+.themeswitch:hover .themeswitch__label {
   color: var(--text);
 }
 
-.themeswitch__on {
-  background: var(--surface);
-  color: var(--text) !important;
-  box-shadow: var(--shadow-sm);
+@media (prefers-reduced-motion: reduce) {
+  .themeswitch__knob {
+    transition: none;
+  }
 }
+
 
 /* The scrolling part, so the sidebar footer can stay put. */
 .panel__scroll {

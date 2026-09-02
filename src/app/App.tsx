@@ -971,29 +971,28 @@ export function App() {
 
         <div className="topbar__actions">
           {/* A utility, so it sits before the action pair rather than after it:
-              Generate and Export stay together at the end of the bar. */}
-          <div className="themeswitch" role="radiogroup" aria-label="Theme">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={theme === 'light'}
-              className={theme === 'light' ? 'themeswitch__on' : ''}
-              onClick={() => setTheme('light')}
-            >
-              <SunIcon />
-              Light
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={theme === 'dark'}
-              className={theme === 'dark' ? 'themeswitch__on' : ''}
-              onClick={() => setTheme('dark')}
-            >
-              <MoonIcon />
-              Dark
-            </button>
-          </div>
+              Generate and Export stay together at the end of the bar.
+
+              `role="switch"` with a FIXED accessible name, because the visible
+              label names the current mode and a name that changes with state
+              is read as a different control each time. The knob travels left
+              for dark and right for light, which is the direction the words
+              already imply. */}
+          <button
+            type="button"
+            className="themeswitch"
+            role="switch"
+            aria-checked={theme === 'light'}
+            aria-label="Light theme"
+            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+          >
+            <span className="themeswitch__track" aria-hidden>
+              <span className="themeswitch__knob" />
+            </span>
+            <span className="themeswitch__label" aria-hidden>
+              {theme === 'light' ? 'Light' : 'Dark'}
+            </span>
+          </button>
 
           {bundle && !dirty ? <span className="badge badge--ok">Up to date</span> : null}
           <button
@@ -2054,27 +2053,6 @@ function PanelIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden>
       <rect x="2" y="3" width="12" height="10" rx="2" />
       <path d="M6.2 3v10" />
-    </svg>
-  );
-}
-
-/** Theme switch glyphs. Two shapes, drawn to the same 14px grid as the rest. */
-function MoonIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {/* Sized to leave a stroke's worth of margin inside the 16 box. The
-          previous crescent reached x=13.5 and y=13.5, so half the 1.4 stroke
-          fell outside the viewBox and the moon came out clipped. */}
-      <path d="M14 8.53A6 6 0 117.47 2 4.67 4.67 0 0014 8.53z" />
-    </svg>
-  );
-}
-
-function SunIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden>
-      <circle cx="8" cy="8" r="3.1" />
-      <path d="M8 1.4v1.5M8 13.1v1.5M1.4 8h1.5M13.1 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M12.6 3.4l-1 1M4.4 11.6l-1 1" />
     </svg>
   );
 }
