@@ -1443,11 +1443,26 @@ export async function assemble(
    * Measured from the terrain's own Z range rather than the model's: a frame, a
    * raised route and a proud insert all stand above the ground, and letting them
    * set the top of the scale would push the snowline down into the hills.
+   *
+   * **The bottom of the scale is the top of the base slab, not the bottom of the
+   * mesh.** `repaired` is a solid: its Z range starts at 0, the underside of the
+   * base, and the ground surface occupies only the sliver above
+   * `baseThickness_mm`. Normalising against the whole solid therefore squashes
+   * every surface triangle into the top of the range and paints the model white.
+   *
+   * Measured on a real build before this was fixed — the Chenab floodplain,
+   * 108.5 to 136.9 m of real relief, a 3 mm base under 0.07 mm of ground:
+   * **101 102 of 102 104 triangles came out Snow**, and the 1 002 that did not
+   * were the flat underside. The 3D preview showed green throughout, because it
+   * paints `part.color` and never looks at the bands, so nothing on screen
+   * disagreed with it. It would have printed as a white disc.
    */
   const terrainZ = zRangeOf(repaired.positions);
+  // Clamped, so a base thicker than the whole model cannot invert the range.
+  const groundFloor_mm = terrainZ ? Math.min(config.baseThickness_mm, terrainZ[1]) : 0;
   const terrainBands =
     config.colorMode === 'multicolor' && terrainZ
-      ? bandTriangles(repaired.positions, repaired.indices, terrainZ[0], terrainZ[1])
+      ? bandTriangles(repaired.positions, repaired.indices, groundFloor_mm, terrainZ[1])
       : null;
 
   const terrainPart: MeshPart = {

@@ -181,3 +181,66 @@ describe('zRangeOf', () => {
     expect(zRangeOf(new Float32Array(0))).toBeNull();
   });
 });
+
+/**
+ * The base slab must not be in the band range.
+ *
+ * A terrain part is a SOLID: it reaches down to z=0 at the underside of the
+ * base, and the ground surface occupies only what is above `baseThickness_mm`.
+ * Band against the whole solid and every surface triangle normalises to nearly
+ * 1, so the model comes out white.
+ *
+ * Measured on a real build before the fix — a Punjab floodplain, 28 m of relief
+ * on a 3 mm base — **101 102 of 102 104 triangles were assigned Snow**. Nothing
+ * on screen disagreed, because the preview paints `part.color` and never reads
+ * the bands.
+ */
+describe('banding a terrain solid', () => {
+  /** A slab from z=0 to `base`, with a surface ramp of `relief` above it. */
+  function slab(base: number, relief: number, steps = 20) {
+    const positions: number[] = [];
+    const indices: number[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const x = i;
+      const top = base + (relief * i) / steps;
+      positions.push(x, 0, 0, x, 0, top);
+    }
+    for (let i = 0; i < steps; i++) {
+      const a = i * 2;
+      indices.push(a, a + 1, a + 3, a, a + 3, a + 2);
+    }
+    return {
+      positions: new Float32Array(positions),
+      indices: new Uint32Array(indices),
+    };
+  }
+
+  it('spreads the palette across the ground when the base is excluded', () => {
+    const { positions, indices } = slab(3, 0.08);
+    const bands = bandTriangles(positions, indices, 3, 3.08);
+    expect(bands).not.toBeNull();
+    const used = new Set(bands!);
+    // A ramp across the whole range must touch most of the palette, not one band.
+    expect(used.size).toBeGreaterThan(2);
+  });
+
+  /**
+   * The bug, stated as a test: including the base collapses everything into the
+   * top band. This is what the old code did.
+   */
+  it('collapses into the top band when the base is included', () => {
+    const { positions, indices } = slab(3, 0.08);
+    const bands = bandTriangles(positions, indices, 0, 3.08);
+    const counts = new Map<number, number>();
+    for (const b of bands!) counts.set(b, (counts.get(b) ?? 0) + 1);
+    const top = TERRAIN_BANDS.length - 1;
+    // Nearly everything lands in Snow — which is the failure, reproduced.
+    expect((counts.get(top) ?? 0) / bands!.length).toBeGreaterThan(0.9);
+  });
+
+  /** A dead flat surface has nothing to band, and must not be painted noise. */
+  it('returns null for a surface with no relief', () => {
+    const { positions, indices } = slab(3, 0);
+    expect(bandTriangles(positions, indices, 3, 3)).toBeNull();
+  });
+});
