@@ -30,14 +30,37 @@
 
   --text: #16140f;
   --text-2: #4b463f;
-  --muted: #7c756c;
+  /* Measured, not chosen by eye: 5.4:1 on the page ground, 5.6:1 on a panel,
+     4.8:1 on the sunken feedback area. The previous #7c756c sat at 4.36 and
+     4.10 — under the 4.5:1 body-text minimum on two of the three. */
+  --muted: #6d675e;
+  /*
+   * NON-TEXT ONLY: chevrons, dividers, decorative glyphs.
+   *
+   * It is 2.4:1 on white, which is fine for a UI shape (those need 3:1 at
+   * 1.5px+ stroke) and nowhere near enough for words. Three tiers of grey where
+   * two must clear 4.5:1 leaves no room, so the third tier stopped being a text
+   * colour rather than being darkened until it duplicated --muted.
+   */
   --faint: #a8a29a;
 
+  /*
+   * Two oranges, because one cannot do both jobs.
+   *
+   * --accent is the brand mark: borders, swatches, focus rings, the slider
+   * thumb, an icon on a tinted ground. Non-text uses need 3:1 and it clears
+   * that at 3.56.
+   *
+   * --accent-strong is for anything involving WORDS — a filled button with
+   * white on it, or orange text on a pale surface. White on --accent measured
+   * 3.56:1, under the 4.5 a 13px semibold button label needs; on
+   * --accent-strong it is 5.18.
+   */
   --accent: #ea580c;
-  --accent-hover: #c2410c;
+  --accent-strong: #c2410c;
+  --accent-hover: #9a3412;
   --accent-soft: #fff2ea;
   --accent-line: #fbd3ba;
-  /* Text that sits ON the accent. White clears 3:1 at button weight. */
   --on-accent: #ffffff;
 
   --ok: #1a7f4b;
@@ -97,6 +120,18 @@
   /* Warmer and lighter than the light theme's orange: the deeper tone goes
      muddy on a near-black ground. */
   --accent: #ff7a45;
+  /*
+   * The same value as --accent here, and that is the correct answer rather
+   * than an oversight.
+   *
+   * In the light theme the two must differ, because white on the bright orange
+   * is only 3.56:1. On a near-black ground the bright orange has room either
+   * way: 7.1:1 as text on a panel, 7.4:1 with the dark on-accent ink over it.
+   * Splitting them here would darken the brand for no gain. Measured, not
+   * assumed — this token was missing entirely at first, so dark inherited the
+   * light #c2410c and the sun readout sat at 3.26:1.
+   */
+  --accent-strong: #ff7a45;
   --accent-hover: #ff8f61;
   --accent-soft: #2a1710;
   --accent-line: #4a2818;
@@ -192,7 +227,16 @@ body {
 .topbar__social {
   display: inline-flex;
   align-items: center;
-  margin-left: 4px;
+  justify-content: center;
+  /* The glyph is 16px; the padding takes the clickable area to 24px, which is
+     the desktop minimum. A target smaller than the pointer's own precision is
+     a target people miss. */
+  /* flex-basis, not just width: the wordmark is a flex row and would otherwise
+     shrink this to 22px. */
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
   opacity: 0.85;
   transition: opacity 120ms ease, transform 120ms ease;
 }
@@ -327,8 +371,8 @@ body {
 }
 
 .btn--accent {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   color: var(--on-accent);
   font-weight: 600;
 }
@@ -624,7 +668,7 @@ body {
 .group__hint {
   font-size: 11px;
   line-height: 1.3;
-  color: var(--faint);
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -777,7 +821,7 @@ body {
   font-size: 10.5px;
   font-weight: 400;
   letter-spacing: 0.02em;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .field__row {
@@ -840,7 +884,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  /* The label wraps the input, so the whole row is the target — but the row
+     was 21px. 24 is the desktop minimum. */
+  min-height: 24px;
+  margin-bottom: 8px;
   font-size: 12.5px;
   color: var(--text-2);
   cursor: pointer;
@@ -1127,7 +1174,7 @@ body {
   gap: 10px;
   padding: 3px 0;
   font-size: 12.5px;
-  color: var(--faint);
+  color: var(--muted);
   transition: color 160ms ease;
 }
 
@@ -1254,7 +1301,7 @@ body {
   gap: 16px;
   padding: 7px 18px 9px;
   font-size: 11px;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 /* The credit takes the space; it is a licence condition, so it wins ties. */
@@ -1274,8 +1321,12 @@ body {
 }
 
 .attribution__actions .btn--link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 6px;
   font-size: 11px;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .attribution__actions .btn--link:hover {
@@ -1397,7 +1448,7 @@ body {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .shapetool {
@@ -1429,7 +1480,7 @@ body {
 }
 
 .shapetool--on {
-  background: var(--accent);
+  background: var(--accent-strong);
   color: var(--on-accent);
 }
 
@@ -1993,7 +2044,7 @@ body {
   margin-left: 5px;
   font-size: 10px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 
 /* --- Q13: desktop-only, said out loud --------------------------------------
