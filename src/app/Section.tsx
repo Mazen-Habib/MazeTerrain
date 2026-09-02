@@ -115,14 +115,21 @@ export function Section({
         <span className="group__icon" aria-hidden>
           {icon}
         </span>
-        <span className="group__label">
-          <span className="group__title">
-            {title}
-            {attention ? <span className="group__dot" aria-label="needs attention" /> : null}
-          </span>
-          {hint && !open ? <span className="group__hint">{hint}</span> : null}
+        <span className="group__title">
+          {title}
+          {attention ? <span className="group__dot" aria-label="needs attention" /> : null}
         </span>
-        {badge ? <span className="group__badge">{badge}</span> : null}
+        {/* One value on the right, on one line.
+            The header used to stack a hint under the title, which made rows
+            32px or 46px depending on whether they had one — and a list whose
+            rows are different heights for reasons the reader cannot see has no
+            rhythm. A count is more use than a description when there is one, so
+            the badge wins and the hint fills in otherwise. */}
+        {badge ? (
+          <span className="group__value group__value--badge">{badge}</span>
+        ) : hint && !open ? (
+          <span className="group__value">{hint}</span>
+        ) : null}
         <Chevron />
       </button>
 

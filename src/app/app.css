@@ -446,7 +446,8 @@ body {
  * always present.
  */
 .panel__top {
-  padding: 12px 14px;
+  padding: 12px 14px 14px;
+  margin-bottom: 8px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -536,6 +537,7 @@ body {
 .panel__scroll {
   flex: 1;
   min-height: 0;
+  padding-bottom: 8px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -605,24 +607,35 @@ body {
 
 /* --- collapsible groups --------------------------------------------------- */
 
+/*
+ * Rows, not a bordered list.
+ *
+ * Every group had a divider under it, which drew six lines to separate six
+ * items that are already obviously separate. The references this was matched
+ * against use one rhythm instead: a uniform row, an inset rounded highlight for
+ * the active one, and a rule only between clusters that actually differ.
+ *
+ * Uniform height is the point. Rows were 32px or 46px depending on whether the
+ * group had a hint, and a list whose rows change height for reasons the reader
+ * cannot see has no rhythm at all.
+ */
 .group {
-  border-bottom: 1px solid var(--line);
+  padding: 0 8px;
 }
 
-.group:last-of-type {
-  border-bottom: none;
+.group + .group {
+  margin-top: 1px;
 }
 
 .group__head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   width: 100%;
-  /* Tight rather than roomy. Six headers with a title and a hint each add up
-     fast, and the sidebar's job is to get you to the control, not to display
-     the headers. */
-  padding: 7px 14px;
+  min-height: 38px;
+  padding: 0 10px;
   border: none;
+  border-radius: var(--r-md);
   background: none;
   color: var(--text);
   font: inherit;
@@ -635,6 +648,12 @@ body {
   background: var(--surface-2);
 }
 
+/* The open group keeps the highlight, so the panel says where you are even
+   after scrolling its contents out of view. */
+.group--open .group__head {
+  background: var(--surface-2);
+}
+
 .group__icon {
   display: flex;
   flex: 0 0 auto;
@@ -643,53 +662,55 @@ body {
 }
 
 .group--open .group__icon {
-  color: var(--accent);
-}
-
-.group__label {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
+  color: var(--accent-strong);
 }
 
 .group__title {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
-  font-weight: 550;
-  line-height: 1.35;
+  font-weight: 500;
   letter-spacing: -0.005em;
-}
-
-/* Shown only while closed: what is inside, so nothing has to be opened to
-   find out what it holds. */
-.group__hint {
-  font-size: 11px;
-  line-height: 1.3;
-  color: var(--muted);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .group__dot {
+  flex: 0 0 auto;
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: var(--accent);
 }
 
-.group__badge {
+/* One right-aligned value: a count where there is one, else a description. */
+.group__value {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group__value--badge {
   flex: 0 0 auto;
   padding: 1px 7px;
   border-radius: var(--r-pill);
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
-  color: var(--muted);
+}
+
+.group--open .group__value {
+  display: none;
 }
 
 .group__chevron {
@@ -702,8 +723,10 @@ body {
   transform: rotate(90deg);
 }
 
+/* Indented to the title, so an open group's contents line up with its name
+   rather than with its icon. */
 .group__body {
-  padding: 2px 14px 14px;
+  padding: 6px 10px 16px 10px;
   animation: group-in 160ms ease;
 }
 
@@ -734,6 +757,12 @@ body {
   margin-top: 14px;
   padding-top: 13px;
   border-top: 1px solid var(--line);
+}
+
+/* The panel's own loose sections keep their rule; groups do not. */
+.panel > .panel__scroll > section {
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 /*
