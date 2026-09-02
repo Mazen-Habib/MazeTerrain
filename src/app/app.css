@@ -542,8 +542,8 @@ body {
   overscroll-behavior: contain;
 }
 
-/* A section that is not inside a collapsible group. */
-.panel section {
+/* A section that is not inside a collapsible group, and not a group itself. */
+.panel section:not(.group):not(.group section) {
   padding: 14px 14px 16px;
   border-bottom: 1px solid var(--line);
 }
@@ -623,8 +623,10 @@ body {
   padding: 0 8px;
 }
 
+/* Flush. The reference navs read as one block; a gap between every row makes
+   six items look like six separate widgets. */
 .group + .group {
-  margin-top: 1px;
+  margin-top: 0;
 }
 
 .group__head {
@@ -760,7 +762,15 @@ body {
 }
 
 /* The panel's own loose sections keep their rule; groups do not. */
-.panel > .panel__scroll > section {
+/*
+ * Loose sections only — NOT the groups.
+ *
+ * `Section` renders a `<section class="group">`, so an unqualified
+ * `> section` rule hit every group and gave each one 14px of padding and a
+ * bottom border. That is what put a rule between all six categories and pushed
+ * them apart, which was exactly the thing the row restyle had just removed.
+ */
+.panel > .panel__scroll > section:not(.group) {
   padding: 14px;
   border-bottom: 1px solid var(--line);
 }
