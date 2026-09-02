@@ -52,8 +52,10 @@ import { Viewer, type ShadingMode } from '../preview/Viewer';
 import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
+import { ICONS, Rail, Section, readOpenGroup, writeOpenGroup, type GroupId } from './Section';
 import { SunControl, DEFAULT_SUN, type SunPosition } from './SunControl';
 import { SUPPORT_LABEL, SUPPORT_URL } from '../config/support';
+import { applyTheme, readTheme, type Theme } from '../config/theme';
 import {
   formatArea,
   formatElevation,
@@ -66,6 +68,7 @@ import {
   type DistanceUnit,
 } from '../config/units';
 import { EstimatePanel, defaultFilamentSettings, type FilamentSettings } from './EstimatePanel';
+import { ExportMenu } from './ExportMenu';
 import { printerProfile } from '../export/estimate';
 import { LayersPanel } from './LayersPanel';
 import { ProjectPanel } from './ProjectPanel';
@@ -230,6 +233,55 @@ export function App() {
    * dirty. Nothing about the mesh depends on which word sits after the number.
    */
   const [unit, setUnit] = useState<DistanceUnit>(() => readUnit());
+
+  /**
+   * Which sidebar group is open. One at a time (see `Section`).
+   *
+   * Read once on mount, like the units preference, and persisted so the panel
+   * comes back where it was left rather than resetting to step one on every
+   * reload.
+   */
+  const [openGroup, setOpenGroup] = useState<GroupId | null>(() => readOpenGroup());
+
+  /**
+   * Sidebar collapsed to an icon rail.
+   *
+   * The map and the 3D preview are the point of the app, and 340px of settings
+   * is a lot of screen to keep spending once they are set.
+   */
+  const [railed, setRailed] = useState(() => {
+    try {
+      return localStorage.getItem('mazeterrain.rail') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleRail = useCallback(() => {
+    setRailed((v) => {
+      try {
+        localStorage.setItem('mazeterrain.rail', v ? '0' : '1');
+      } catch {
+        // Session-only is fine.
+      }
+      return !v;
+    });
+  }, []);
+
+  /** Light or dark. Stamped on <html>, so every token flips at once. */
+  const [theme, setTheme] = useState<Theme>(() => readTheme());
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  const toggleGroup = useCallback((id: GroupId) => {
+    setOpenGroup((current) => {
+      const next = current === id ? null : id;
+      writeOpenGroup(next);
+      return next;
+    });
+  }, []);
   /**
    * Live terrain on by default (F3.2).
    *
@@ -563,6 +615,12 @@ export function App() {
    * Recomputed with the selection because that is what drives it. Cheap: this
    * counts grid cells, it does not touch the network.
    */
+  /** For the Map layers group badge, so a closed group still says how many. */
+  const enabledLayerCount = useMemo(
+    () => (Object.keys(settings.layers) as LayerId[]).filter((id) => settings.layers[id]?.enabled).length,
+    [settings.layers],
+  );
+
   const osmPlan = useMemo(() => {
     if (!shape) return null;
     const enabled = (Object.keys(settings.layers) as LayerId[]).filter(
@@ -867,6 +925,16 @@ export function App() {
 
       <header className="topbar">
         <h1>
+          <button
+            type="button"
+            className="btn btn--icon"
+            onClick={toggleRail}
+            title={railed ? 'Show settings' : 'Collapse settings'}
+            aria-label={railed ? 'Show settings panel' : 'Collapse settings panel'}
+            aria-expanded={!railed}
+          >
+            <PanelIcon />
+          </button>
           Peakora <span className="topbar__phase">Phase 2</span>
         </h1>
 
@@ -899,778 +967,842 @@ export function App() {
           >
             {busy ? 'Generating…' : 'Generate'}
           </button>
-          {separateParts ? (
-            <button
-              className="btn"
-              onClick={onDownloadParts}
-              disabled={!bundle || blocked || busy}
-              title="One STL per part, plus a note on how they fit together"
-            >
-              Download parts (ZIP)
-            </button>
-          ) : null}
-          <button
-            className="btn"
-            onClick={onDownload3mf}
+          <ExportMenu
             disabled={!bundle || blocked || busy}
-            title="Every layer as its own object and material — colours survive into the slicer"
-          >
-            Download 3MF
-          </button>
-          <button className="btn" onClick={onDownload} disabled={!bundle || blocked || busy}>
-            Download STL
-          </button>
+            separateParts={separateParts}
+            onDownloadStl={onDownload}
+            onDownload3mf={onDownload3mf}
+            onDownloadParts={onDownloadParts}
+          />
         </div>
       </header>
 
       <div className="body">
-        <aside className="panel">
-          <SunControl
-            sun={sun}
-            onChange={setSun}
-            enabled={terrain3d}
-            onEnabledChange={setTerrain3d}
-          />
-          <RoutePanel
-            unit={unit}
-            colorMode={config.colorMode}
-            cutoutSubMode={config.cutout.subMode}
-            insertProud_mm={config.cutout.insertProud_mm}
-            onInsertProudChange={(v) => update({ cutout: { ...config.cutout, insertProud_mm: v } })}
-            routes={routes}
-            busy={busy}
-            drawing={tool === 'route'}
-            onDraw={() => {
-              setEditingRouteId(null);
-              setTool(tool === 'route' ? null : 'route');
-            }}
-            onSmoothing={onSmoothing}
-            onReverse={onReverse}
-            editingRouteId={editingRouteId}
-            onEditPoints={setEditingRouteId}
-            onUpload={onUpload}
-            onUpdate={updateRoute}
-            onRemove={removeRoute}
-            onFit={() => fitToRoutes(routes)}
-          />
-
-          <LayersPanel
-            unit={unit}
-            layers={config.layers}
-            busy={busy}
-            nozzleDiameter_mm={config.nozzleDiameter_mm}
-            scale_mm_per_m={previewScale_mm_per_m}
-            summaries={bundle?.layers ?? []}
-            preview={preview?.summary ?? null}
-            previewBusy={previewBusy}
-            previewError={previewError}
-            previewStale={previewStale}
-            onPreview={onPreviewFeatures}
-            onChange={updateLayer}
-          />
-
-          <section>
-            <h2>Selection</h2>
-            <p className="note">
-              Current area: <strong>{areaLabel}</strong> · {formatArea(area_km2, unit)}
-            </p>
-            <label className="field__label" htmlFor="preset">
-              Jump to
-            </label>
-            <select
-              id="preset"
-              className="select"
-              onChange={(e) => onPreset(e.target.value)}
-              disabled={busy}
-              value=""
-            >
-              <option value="" disabled>
-                Pick an area…
-              </option>
-              {PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-
-            <label className="field__label" htmlFor="basemap">
-              Basemap
-            </label>
-            <select
-              id="basemap"
-              className="select"
-              value={basemapId}
-              onChange={(e) => setBasemapId(e.target.value)}
-            >
-              {BASEMAPS.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={terrain3d}
-                onChange={(e) => setTerrain3d(e.target.checked)}
-              />
-              Live 3D terrain on the map
-            </label>
-
-            <label className="field__label" htmlFor="dataset">
-              Elevation dataset
-            </label>
-            <select
-              id="dataset"
-              className="select"
-              value={config.dataset}
-              onChange={(e) => update({ dataset: e.target.value })}
-              disabled={busy}
-            >
-              {Object.values(DEM_DATASETS).map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.label}
-                </option>
-              ))}
-            </select>
-          </section>
-
-          <section>
-            <h2>Model size</h2>
-            <NumberField
-              label="Model width"
-              unit="mm"
-              value={config.modelWidth_mm}
-              min={20}
-              max={400}
-              step={1}
-              disabled={busy}
-              onChange={(v) => update({ modelWidth_mm: v })}
-              hint="Longest edge of the printed model."
-            />
-            <div className="field">
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={config.profile.enabled}
-                  disabled={busy || routes.length === 0}
-                  onChange={(e) =>
-                    update({ profile: { ...config.profile, enabled: e.target.checked } })
-                  }
-                />
-                Elevation profile
-              </label>
-              <p className="field__hint">
-                {routes.length === 0
-                  ? 'Needs a route — the profile charts the climb along one.'
-                  : 'A bar below the model showing the route’s climb: distance left to right, height up. Heights come from the same terrain the model is built on. It makes the print taller.'}
-              </p>
-            </div>
-
-            {config.profile.enabled && routes.length > 0 ? (
-              <>
-                <NumberField
-                  label="Profile depth"
-                  unit="mm"
-                  value={config.profile.depth_mm}
-                  min={6}
-                  max={40}
-                  step={1}
-                  disabled={busy}
-                  onChange={(v) => update({ profile: { ...config.profile, depth_mm: v } })}
-                  hint={`How tall the chart is. The print grows to about ${(config.modelWidth_mm + config.profile.depth_mm - 3).toFixed(0)} mm front to back.`}
-                />
-                <NumberField
-                  label="Profile relief"
-                  unit="mm"
-                  value={config.profile.height_mm}
-                  min={0.4}
-                  max={5}
-                  step={0.1}
-                  disabled={busy}
-                  onChange={(v) => update({ profile: { ...config.profile, height_mm: v } })}
-                  hint="How far the climb stands off the bar."
-                />
-              </>
-            ) : null}
-
-            <div className="field">
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={config.frame.enabled}
-                  disabled={busy}
-                  onChange={(e) => update({ frame: { ...config.frame, enabled: e.target.checked } })}
-                />
-                Frame
-              </label>
-              <p className="field__hint">
-                A flat-topped rim round the inside of the edge. Narrow reads as a lip;
-                wide gives a picture frame with room for a plaque.
-              </p>
-            </div>
-
-            {config.frame.enabled ? (
-              <>
-                <NumberField
-                  label="Frame width"
-                  unit="mm"
-                  value={config.frame.width_mm}
-                  min={2}
-                  max={30}
-                  step={0.5}
-                  disabled={busy}
-                  onChange={(v) => update({ frame: { ...config.frame, width_mm: v } })}
-                  hint={`Added outside the map, so the print comes out ${(config.modelWidth_mm + config.frame.width_mm * 2).toFixed(0)} mm across. The map keeps its full ${config.modelWidth_mm} mm.`}
-                />
-                <NumberField
-                  label="Frame height"
-                  unit="mm"
-                  value={config.frame.height_mm}
-                  min={1}
-                  max={15}
-                  step={0.5}
-                  disabled={busy}
-                  onChange={(v) => update({ frame: { ...config.frame, height_mm: v } })}
-                  hint="Above the lowest ground. Terrain higher than this stands over the rim."
-                />
-
-                <div className="field">
-                  <label className="field__label" htmlFor="label-text">
-                    Engraved label
-                  </label>
-                  <input
-                    id="label-text"
-                    className="textInput textInput--wide"
-                    placeholder="MARGALLA TRAIL 5"
-                    value={config.label.text}
-                    disabled={busy}
-                    maxLength={64}
-                    onChange={(e) => update({ label: { ...config.label, text: e.target.value } })}
-                  />
-                  <p className="field__hint">
-                    Cut into the frame&rsquo;s top face, following the frame round the bottom
-                    of the model. A single-stroke engraving font: capitals, digits and common
-                    punctuation, so lowercase is set as capitals.
-                  </p>
-                </div>
-
-                {config.label.text.trim().length > 0 ? (
-                  <>
-                    <NumberField
-                      label="Label size"
-                      unit="mm"
-                      value={config.label.capHeight_mm}
-                      min={1.5}
-                      max={20}
-                      step={0.5}
-                      disabled={busy}
-                      onChange={(v) => update({ label: { ...config.label, capHeight_mm: v } })}
-                      hint="Cap height. Capped at just over half the frame width."
-                    />
-                    <NumberField
-                      label="Label depth"
-                      unit="mm"
-                      value={config.label.depth_mm}
-                      min={0.2}
-                      max={3}
-                      step={0.1}
-                      disabled={busy}
-                      onChange={(v) => update({ label: { ...config.label, depth_mm: v } })}
-                      hint="At least two or three layers, or the groove will not read."
-                    />
-
-                    <div className="field">
-                      <label className="field__label">
-                        Stroke weight<span className="field__unit">mm</span>
-                      </label>
-                      <label className="checkbox">
-                        <input
-                          type="checkbox"
-                          checked={config.label.strokeWidth_mm === 'auto'}
-                          disabled={busy}
-                          onChange={(e) =>
-                            update({
-                              label: {
-                                ...config.label,
-                                strokeWidth_mm: e.target.checked
-                                  ? 'auto'
-                                  : Number((config.label.capHeight_mm / 7).toFixed(2)),
-                              },
-                            })
-                          }
-                        />
-                        Auto (bold — a seventh of the label size)
-                      </label>
-                    </div>
-                    {config.label.strokeWidth_mm === 'auto' ? null : (
-                      <NumberField
-                        label="Stroke width"
-                        unit="mm"
-                        value={config.label.strokeWidth_mm}
-                        min={0.1}
-                        max={4}
-                        step={0.05}
-                        disabled={busy}
-                        onChange={(v) => update({ label: { ...config.label, strokeWidth_mm: v } })}
-                        hint={`Never thinner than the ${config.nozzleDiameter_mm} mm nozzle, and capped so the letters do not weld shut.`}
-                      />
-                    )}
-                  </>
-                ) : null}
-              </>
-            ) : null}
-
-            <NumberField
-              label="Base thickness"
-              unit="mm"
-              value={config.baseThickness_mm}
-              min={0.6}
-              max={20}
-              step={0.1}
-              disabled={busy}
-              onChange={(v) => update({ baseThickness_mm: v })}
-            />
-            <NumberField
-              label="Layer height"
-              unit="mm"
-              value={config.layerHeight_mm}
-              min={0.05}
-              max={0.4}
-              step={0.05}
-              disabled={busy}
-              onChange={(v) => update({ layerHeight_mm: v })}
-            />
-            <div className="field">
-              <label className="field__label" htmlFor="nozzle">
-                Printer nozzle<span className="field__unit">mm</span>
-              </label>
-              <select
-                id="nozzle"
-                className="select"
-                value={config.nozzleDiameter_mm}
-                onChange={(e) => update({ nozzleDiameter_mm: Number(e.target.value) })}
-                disabled={busy}
-              >
-                <option value={0.2}>0.2 mm — Fine</option>
-                <option value={0.4}>0.4 mm — Standard</option>
-                <option value={0.6}>0.6 mm — Fast</option>
-                <option value={0.8}>0.8 mm — Draft</option>
-              </select>
-              <p className="field__hint">Sets the floor on terrain detail.</p>
-            </div>
-
-            <EstimatePanel
-              printerLabel={
-                BED_PRESETS.find((b) => b.id === printerId)?.label.replace(/ \(.*/, '') ?? null
+        {railed ? (
+          <Rail
+            openGroup={openGroup}
+            onPick={(id) => {
+              setRailed(false);
+              try {
+                localStorage.setItem('mazeterrain.rail', '0');
+              } catch {
+                // Session-only is fine.
               }
-              measures={bundle?.measures ?? null}
-              settings={filament}
-              onChange={(patch) => setFilament((c) => ({ ...c, ...patch }))}
-              layerHeight_mm={config.layerHeight_mm}
-              nozzleDiameter_mm={config.nozzleDiameter_mm}
-              stale={dirty}
-            />
-
-            <div className="field">
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={config.contours.enabled}
-                  disabled={busy}
-                  onChange={(e) =>
-                    update({ contours: { ...config.contours, enabled: e.target.checked } })
-                  }
-                />
-                Contours
-              </label>
-              <p className="field__hint">
-                Reads relief at a glance. Most useful in the single-colour modes, where
-                otherwise only the silhouette shows it.
+              setOpenGroup(id);
+              writeOpenGroup(id);
+            }}
+          />
+        ) : (
+        <aside className="panel">
+          <div className="panel__scroll">
+            <Section
+              id="place"
+              title="Place"
+              hint={areaLabel}
+              badge={formatArea(area_km2, unit)}
+              icon={ICONS.place}
+              open={openGroup === 'place'}
+              onToggle={() => toggleGroup('place')}
+            >
+            <section>
+              <p className="note">
+                Current area: <strong>{areaLabel}</strong> · {formatArea(area_km2, unit)}
               </p>
-            </div>
-
-            {config.contours.enabled ? (
-              <>
-                <div className="field">
-                  <label className="field__label" htmlFor="contour-style">
-                    Contour style
-                  </label>
-                  <select
-                    id="contour-style"
-                    className="select"
-                    value={config.contours.style}
-                    disabled={busy}
-                    onChange={(e) =>
-                      update({
-                        contours: {
-                          ...config.contours,
-                          style: e.target.value === 'lines' ? 'lines' : 'terraced',
-                        },
-                      })
-                    }
-                  >
-                    <option value="terraced">Terraced — stepped shelves</option>
-                    <option value="lines">Lines — raised rings</option>
-                  </select>
-                  <p className="field__hint">
-                    {config.contours.style === 'terraced'
-                      ? 'The terrain itself becomes flat shelves with a step between each, the way a laser-cut plywood relief map is built. The step edge is the contour, so there is nothing thin to print.'
-                      : 'Traces the contours and raises them as thin rings on the smooth terrain. Technically correct, but at a nozzle wide they read as roads wandering across the slope.'}
-                  </p>
-                </div>
-
-                <div className="field">
-                  <label className="field__label">
-                    {config.contours.style === 'terraced' ? 'Step height' : 'Contour interval'}
-                    <span className="field__unit">m</span>
-                  </label>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={config.contours.interval_m === 'auto'}
-                      disabled={busy}
-                      onChange={(e) =>
-                        update({
-                          contours: {
-                            ...config.contours,
-                            interval_m: e.target.checked ? 'auto' : 100,
-                          },
-                        })
-                      }
-                    />
-                    Auto (sized so the rings stay apart on this terrain)
-                  </label>
-                </div>
-                {config.contours.interval_m === 'auto' ? null : (
-                  <NumberField
-                    label="Metres between rings"
-                    unit="m"
-                    value={config.contours.interval_m}
-                    min={5}
-                    max={500}
-                    step={5}
-                    disabled={busy}
-                    onChange={(v) => update({ contours: { ...config.contours, interval_m: v } })}
-                    hint={
-                      bundle
-                        ? `This area spans ${formatElevation(
-                            bundle.stats.elevationRange_m[1] - bundle.stats.elevationRange_m[0],
-                            unit,
-                          )}.`
-                        : 'Real metres of elevation between rings.'
-                    }
-                  />
-                )}
-                <NumberField
-                  label="Contour height"
-                  unit="mm"
-                  value={config.contours.lineHeight_mm}
-                  min={0.2}
-                  max={3}
-                  step={0.1}
-                  disabled={busy}
-                  onChange={(v) => update({ contours: { ...config.contours, lineHeight_mm: v } })}
-                  hint="How far each ring stands above the terrain."
-                />
-              </>
-            ) : null}
-
-            <div className="field">
-              <label className="field__label" htmlFor="colormode">
-                Colour mode
+              <label className="field__label" htmlFor="preset">
+                Jump to
               </label>
               <select
-                id="colormode"
+                id="preset"
                 className="select"
-                value={config.colorMode}
-                onChange={(e) => update({ colorMode: e.target.value as ColorMode })}
+                onChange={(e) => onPreset(e.target.value)}
                 disabled={busy}
+                value=""
               >
-                <option value="multicolor">Multicolour — one object per layer</option>
-                <option value="single-raised">Single colour, raised route</option>
-                <option value="single-cutout">Single colour, route cut out</option>
+                <option value="" disabled>
+                  Pick an area…
+                </option>
+                {PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
               </select>
-              <p className="field__hint">
-                {config.colorMode === 'multicolor'
-                  ? 'Every layer stays a separate object. Export 3MF and the slicer assigns a filament to each.'
-                  : config.colorMode === 'single-raised'
-                    ? 'Everything merges into one body, with the route standing proud. Legible by relief alone — raise the route height for a stronger read.'
-                    : 'The route is cut out of the terrain, leaving a channel to paint or fill.'}
-              </p>
-            </div>
 
-            {config.colorMode === 'single-cutout' ? (
-              <>
-                <div className="field">
-                  <label className="field__label" htmlFor="submode">
-                    Cutout style
-                  </label>
-                  <select
-                    id="submode"
-                    className="select"
-                    value={config.cutout.subMode}
-                    onChange={(e) =>
-                      update({
-                        cutout: { ...config.cutout, subMode: e.target.value as CutoutSubMode },
-                      })
-                    }
-                    disabled={busy}
-                  >
-                    <option value="groove">Groove — channel only, to paint or fill</option>
-                    <option value="inlay">Inlay — plus a separate insert to press in</option>
-                  </select>
-                  <p className="field__hint">
-                    {config.cutout.subMode === 'groove'
-                      ? 'One body with a recessed channel.'
-                      : 'Two bodies: the terrain with a cavity, and the route insert to print in a second colour.'}
-                  </p>
-                </div>
-
-                <NumberField
-                  label="Channel depth"
-                  unit="mm"
-                  value={config.cutout.insetDepth_mm}
-                  min={0.3}
-                  max={4}
-                  step={0.1}
-                  disabled={busy}
-                  onChange={(v) => update({ cutout: { ...config.cutout, insetDepth_mm: v } })}
-                  hint="Measured below the lowest ground the route crosses — the floor is flat so the insert seats without supports."
-                />
-
-                {config.cutout.subMode === 'inlay' ? (
-                  <>
-                    <NumberField
-                      label="Clearance"
-                      unit="mm"
-                      value={config.cutout.clearance_mm}
-                      min={0.05}
-                      max={0.5}
-                      step={0.05}
-                      disabled={busy}
-                      onChange={(v) => update({ cutout: { ...config.cutout, clearance_mm: v } })}
-                      hint="Gap per side. Too tight and the insert will not seat; too loose and it rattles. 0.15 mm is the usual FDM press fit."
-                    />
-                    <p className="field__hint">
-                      How far the insert stands out of the channel is the route&rsquo;s
-                      <strong> Height</strong>, under Routes. Zero seats it flush.
-                    </p>
-                  </>
-                ) : null}
-
-                <div className="field">
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={config.cutout.water}
-                      disabled={busy || !config.layers['water']?.enabled}
-                      onChange={(e) =>
-                        update({ cutout: { ...config.cutout, water: e.target.checked } })
-                      }
-                    />
-                    Cut the water out too
-                  </label>
-                  <p className="field__hint">
-                    {!config.layers['water']?.enabled
-                      ? 'Turn the Water layer on under Layers, and lakes and rivers can be cut out as well.'
-                      : config.cutout.subMode === 'inlay'
-                        ? 'Lakes and rivers become a basin plus a second insert, to print in blue and press in. Its top is flat — water is level, whatever the ground under it does.'
-                        : 'Lakes and rivers become a recessed basin to paint or fill. Switch Cutout style to Inlay to get a piece to press in instead.'}
-                  </p>
-                </div>
-              </>
-            ) : null}
-
-            <div className="field">
-              <label className="field__label" htmlFor="bed">
-                Printer bed
+              <label className="field__label" htmlFor="basemap">
+                Basemap
               </label>
               <select
-                id="bed"
+                id="basemap"
                 className="select"
-                value={printerId ?? 'none'}
-                onChange={(e) =>
-                  update({
-                    bedSize_mm: BED_PRESETS.find((b) => b.id === e.target.value)?.size ?? null,
-                  })
-                }
-                disabled={busy}
+                value={basemapId}
+                onChange={(e) => setBasemapId(e.target.value)}
               >
-                {BED_PRESETS.map((b) => (
+                {BASEMAPS.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.label}
                   </option>
                 ))}
               </select>
-              <p className="field__hint">
-                Warns when the model will not fit. Never blocks — printing in sections is a
-                perfectly good plan.
-              </p>
-            </div>
-
-            <div className="field">
               <label className="checkbox">
                 <input
                   type="checkbox"
-                  checked={config.tiling.enabled}
-                  disabled={busy || !config.bedSize_mm}
-                  onChange={(e) => update({ tiling: { enabled: e.target.checked } })}
+                  checked={terrain3d}
+                  onChange={(e) => setTerrain3d(e.target.checked)}
                 />
-                Split to fit the bed
+                Live 3D terrain on the map
               </label>
-              <p className="field__hint">
-                {!config.bedSize_mm
-                  ? 'Pick a printer bed above, and this can cut an oversized model into pieces that fit it.'
-                  : 'Cuts an oversized model into a grid of bed-sized pieces, each exported ready to print. A model that already fits is left alone. Seams are flat butt joints — glue them; there are no alignment pins yet.'}
-              </p>
-            </div>
-          </section>
 
-          <section>
-            <h2>Topography</h2>
-            <NumberField
-              label="Vertical exaggeration"
-              unit="×"
-              value={config.verticalExaggeration}
-              min={0.5}
-              max={5}
-              step={0.1}
-              disabled={busy}
-              onChange={(v) => update({ verticalExaggeration: v })}
-              hint="Flat city 2.5–4×, rolling hills 1.5–2×, alpine 1.0–1.5×."
-            />
-            <NumberField
-              label="Max height"
-              unit="mm"
-              value={config.maxHeight_mm}
-              min={2}
-              max={100}
-              step={1}
-              disabled={busy}
-              onChange={(v) => update({ maxHeight_mm: v })}
-              hint="Clamps the tallest peak. Exaggeration is reduced to fit."
-            />
-            <div className="field">
-              <label className="field__label">
-                Sampling step<span className="field__unit">m</span>
+              <label className="field__label" htmlFor="dataset">
+                Elevation dataset
               </label>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={autoResolution}
-                  disabled={busy}
-                  onChange={(e) => {
-                    setAutoResolution(e.target.checked);
-                    update({
-                      resolution_m: e.target.checked ? 'auto' : (gridPreview?.resolution_m ?? 30),
-                    });
-                  }}
-                />
-                Auto
-              </label>
-            </div>
-            {!autoResolution ? (
+              <select
+                id="dataset"
+                className="select"
+                value={config.dataset}
+                onChange={(e) => update({ dataset: e.target.value })}
+                disabled={busy}
+              >
+                {Object.values(DEM_DATASETS).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </section>
+
+            </Section>
+
+            <Section
+              id="route"
+              title="Route"
+              hint={routes.length === 0 ? 'No route yet' : routes[0].name}
+              badge={routes.length || undefined}
+              icon={ICONS.route}
+              open={openGroup === 'route'}
+              onToggle={() => toggleGroup('route')}
+            >
+            <RoutePanel
+              unit={unit}
+              colorMode={config.colorMode}
+              cutoutSubMode={config.cutout.subMode}
+              insertProud_mm={config.cutout.insertProud_mm}
+              onInsertProudChange={(v) => update({ cutout: { ...config.cutout, insertProud_mm: v } })}
+              routes={routes}
+              busy={busy}
+              drawing={tool === 'route'}
+              onDraw={() => {
+                setEditingRouteId(null);
+                setTool(tool === 'route' ? null : 'route');
+              }}
+              onSmoothing={onSmoothing}
+              onReverse={onReverse}
+              editingRouteId={editingRouteId}
+              onEditPoints={setEditingRouteId}
+              onUpload={onUpload}
+              onUpdate={updateRoute}
+              onRemove={removeRoute}
+              onFit={() => fitToRoutes(routes)}
+            />
+
+            </Section>
+
+            <Section
+              id="layers"
+              title="Map layers"
+              hint={enabledLayerCount === 0 ? 'None on' : undefined}
+              badge={enabledLayerCount || undefined}
+              icon={ICONS.layers}
+              open={openGroup === 'layers'}
+              onToggle={() => toggleGroup('layers')}
+            >
+            <LayersPanel
+              unit={unit}
+              layers={config.layers}
+              busy={busy}
+              nozzleDiameter_mm={config.nozzleDiameter_mm}
+              scale_mm_per_m={previewScale_mm_per_m}
+              summaries={bundle?.layers ?? []}
+              preview={preview?.summary ?? null}
+              previewBusy={previewBusy}
+              previewError={previewError}
+              previewStale={previewStale}
+              onPreview={onPreviewFeatures}
+              onChange={updateLayer}
+            />
+
+            </Section>
+
+            <Section
+              id="model"
+              title="Model"
+              hint={`${config.modelWidth_mm} mm wide`}
+              icon={ICONS.model}
+              open={openGroup === 'model'}
+              onToggle={() => toggleGroup('model')}
+            >
+            <section>
               <NumberField
-                label="Resolution"
-                unit="m/px"
-                value={typeof config.resolution_m === 'number' ? config.resolution_m : 30}
-                min={5}
-                max={500}
+                label="Model width"
+                unit="mm"
+                value={config.modelWidth_mm}
+                min={20}
+                max={400}
                 step={1}
                 disabled={busy}
-                onChange={(v) => update({ resolution_m: v })}
+                onChange={(v) => update({ modelWidth_mm: v })}
+                hint="Longest edge of the printed model."
               />
-            ) : null}
-            <NumberField
-              label="Smoothing"
-              value={config.smoothing}
-              min={0}
-              max={5}
-              step={1}
-              disabled={busy}
-              onChange={(v) => update({ smoothing: v })}
-              hint="Laplacian passes. Flattens genuine features — default 0."
-            />
-          </section>
+              <div className="field">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={config.profile.enabled}
+                    disabled={busy || routes.length === 0}
+                    onChange={(e) =>
+                      update({ profile: { ...config.profile, enabled: e.target.checked } })
+                    }
+                  />
+                  Elevation profile
+                </label>
+                <p className="field__hint">
+                  {routes.length === 0
+                    ? 'Needs a route — the profile charts the climb along one.'
+                    : 'A bar below the model showing the route’s climb: distance left to right, height up. Heights come from the same terrain the model is built on. It makes the print taller.'}
+                </p>
+              </div>
 
-          {gridPreview ? (
-            <section>
-              <h2>Before you generate</h2>
-              <dl className="stats">
-                <dt>Real extent</dt>
-                <dd>
-                  {formatExtent(gridPreview.extentX_m / 1000, gridPreview.extentY_m / 1000, unit)}
-                </dd>
-                <dt>Sampling step</dt>
-                <dd>
-                  {formatGroundLength(gridPreview.resolution_m, unit)}
-                  {gridPreview.resolutionNozzleLimited ? (
-                    <span className="badge">nozzle-limited</span>
-                  ) : null}
-                </dd>
-                <dt>Grid</dt>
-                <dd>
-                  {gridPreview.cols} × {gridPreview.rows}
-                </dd>
-                {osmPlan ? (
-                  <>
-                    <dt>Map data</dt>
-                    <dd>
-                      {osmPlan.single
-                        ? '1 request'
-                        : `${osmPlan.tiles} requests · about ${fetchTimeLabel(osmPlan.seconds)}, longer if OpenStreetMap is busy`}
-                      {osmPlan.tiles >= HUGE_FETCH_TILES ? (
-                        <span className="badge badge--huge">too many</span>
-                      ) : osmPlan.seconds >= SLOW_FETCH_S ? (
-                        <span className="badge badge--slow">slow</span>
-                      ) : null}
-                    </dd>
-                  </>
-                ) : null}
-              </dl>
-              {/* The indicator, not a refusal. A 100 km route genuinely needs
-                  this many requests and OpenStreetMap will only take them at
-                  its own pace; someone told that up front waits, while someone
-                  told nothing assumes it has hung and cancels. Two tiers,
-                  because "leave it running" stops being true somewhere. */}
-              {osmPlan && osmPlan.tiles >= HUGE_FETCH_TILES ? (
-                <p className="note note--warn">
-                  This selection needs <strong>{osmPlan.tiles} requests</strong> to
-                  OpenStreetMap — several hours, and more than it will serve in one run.
-                  The terrain builds regardless. To get the map features too: untick layers
-                  you do not need, or shrink the selection. Whatever does load is cached, so
-                  pressing Generate again picks up where it stopped.
-                </p>
-              ) : osmPlan && osmPlan.seconds >= SLOW_FETCH_S ? (
-                <p className="note">
-                  A selection this size is fetched in {osmPlan.tiles} pieces, paced so
-                  OpenStreetMap keeps answering. It will finish — leave it running. Areas
-                  already fetched are cached, so a second Generate is much faster, and
-                  unticking layers you do not need cuts the work.
-                </p>
+              {config.profile.enabled && routes.length > 0 ? (
+                <>
+                  <NumberField
+                    label="Profile depth"
+                    unit="mm"
+                    value={config.profile.depth_mm}
+                    min={6}
+                    max={40}
+                    step={1}
+                    disabled={busy}
+                    onChange={(v) => update({ profile: { ...config.profile, depth_mm: v } })}
+                    hint={`How tall the chart is. The print grows to about ${(config.modelWidth_mm + config.profile.depth_mm - 3).toFixed(0)} mm front to back.`}
+                  />
+                  <NumberField
+                    label="Profile relief"
+                    unit="mm"
+                    value={config.profile.height_mm}
+                    min={0.4}
+                    max={5}
+                    step={0.1}
+                    disabled={busy}
+                    onChange={(v) => update({ profile: { ...config.profile, height_mm: v } })}
+                    hint="How far the climb stands off the bar."
+                  />
+                </>
               ) : null}
+
+              <div className="field">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={config.frame.enabled}
+                    disabled={busy}
+                    onChange={(e) => update({ frame: { ...config.frame, enabled: e.target.checked } })}
+                  />
+                  Frame
+                </label>
+                <p className="field__hint">
+                  A flat-topped rim round the inside of the edge. Narrow reads as a lip;
+                  wide gives a picture frame with room for a plaque.
+                </p>
+              </div>
+
+              {config.frame.enabled ? (
+                <>
+                  <NumberField
+                    label="Frame width"
+                    unit="mm"
+                    value={config.frame.width_mm}
+                    min={2}
+                    max={30}
+                    step={0.5}
+                    disabled={busy}
+                    onChange={(v) => update({ frame: { ...config.frame, width_mm: v } })}
+                    hint={`Added outside the map, so the print comes out ${(config.modelWidth_mm + config.frame.width_mm * 2).toFixed(0)} mm across. The map keeps its full ${config.modelWidth_mm} mm.`}
+                  />
+                  <NumberField
+                    label="Frame height"
+                    unit="mm"
+                    value={config.frame.height_mm}
+                    min={1}
+                    max={15}
+                    step={0.5}
+                    disabled={busy}
+                    onChange={(v) => update({ frame: { ...config.frame, height_mm: v } })}
+                    hint="Above the lowest ground. Terrain higher than this stands over the rim."
+                  />
+
+                  <div className="field">
+                    <label className="field__label" htmlFor="label-text">
+                      Engraved label
+                    </label>
+                    <input
+                      id="label-text"
+                      className="textInput textInput--wide"
+                      placeholder="MARGALLA TRAIL 5"
+                      value={config.label.text}
+                      disabled={busy}
+                      maxLength={64}
+                      onChange={(e) => update({ label: { ...config.label, text: e.target.value } })}
+                    />
+                    <p className="field__hint">
+                      Cut into the frame&rsquo;s top face, following the frame round the bottom
+                      of the model. A single-stroke engraving font: capitals, digits and common
+                      punctuation, so lowercase is set as capitals.
+                    </p>
+                  </div>
+
+                  {config.label.text.trim().length > 0 ? (
+                    <>
+                      <NumberField
+                        label="Label size"
+                        unit="mm"
+                        value={config.label.capHeight_mm}
+                        min={1.5}
+                        max={20}
+                        step={0.5}
+                        disabled={busy}
+                        onChange={(v) => update({ label: { ...config.label, capHeight_mm: v } })}
+                        hint="Cap height. Capped at just over half the frame width."
+                      />
+                      <NumberField
+                        label="Label depth"
+                        unit="mm"
+                        value={config.label.depth_mm}
+                        min={0.2}
+                        max={3}
+                        step={0.1}
+                        disabled={busy}
+                        onChange={(v) => update({ label: { ...config.label, depth_mm: v } })}
+                        hint="At least two or three layers, or the groove will not read."
+                      />
+
+                      <div className="field">
+                        <label className="field__label">
+                          Stroke weight<span className="field__unit">mm</span>
+                        </label>
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={config.label.strokeWidth_mm === 'auto'}
+                            disabled={busy}
+                            onChange={(e) =>
+                              update({
+                                label: {
+                                  ...config.label,
+                                  strokeWidth_mm: e.target.checked
+                                    ? 'auto'
+                                    : Number((config.label.capHeight_mm / 7).toFixed(2)),
+                                },
+                              })
+                            }
+                          />
+                          Auto (bold — a seventh of the label size)
+                        </label>
+                      </div>
+                      {config.label.strokeWidth_mm === 'auto' ? null : (
+                        <NumberField
+                          label="Stroke width"
+                          unit="mm"
+                          value={config.label.strokeWidth_mm}
+                          min={0.1}
+                          max={4}
+                          step={0.05}
+                          disabled={busy}
+                          onChange={(v) => update({ label: { ...config.label, strokeWidth_mm: v } })}
+                          hint={`Never thinner than the ${config.nozzleDiameter_mm} mm nozzle, and capped so the letters do not weld shut.`}
+                        />
+                      )}
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+
+              <NumberField
+                label="Base thickness"
+                unit="mm"
+                value={config.baseThickness_mm}
+                min={0.6}
+                max={20}
+                step={0.1}
+                disabled={busy}
+                onChange={(v) => update({ baseThickness_mm: v })}
+              />
+              <NumberField
+                label="Layer height"
+                unit="mm"
+                value={config.layerHeight_mm}
+                min={0.05}
+                max={0.4}
+                step={0.05}
+                disabled={busy}
+                onChange={(v) => update({ layerHeight_mm: v })}
+              />
+              <div className="field">
+                <label className="field__label" htmlFor="nozzle">
+                  Printer nozzle<span className="field__unit">mm</span>
+                </label>
+                <select
+                  id="nozzle"
+                  className="select"
+                  value={config.nozzleDiameter_mm}
+                  onChange={(e) => update({ nozzleDiameter_mm: Number(e.target.value) })}
+                  disabled={busy}
+                >
+                  <option value={0.2}>0.2 mm — Fine</option>
+                  <option value={0.4}>0.4 mm — Standard</option>
+                  <option value={0.6}>0.6 mm — Fast</option>
+                  <option value={0.8}>0.8 mm — Draft</option>
+                </select>
+                <p className="field__hint">Sets the floor on terrain detail.</p>
+              </div>
+
+
+              <div className="field">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={config.contours.enabled}
+                    disabled={busy}
+                    onChange={(e) =>
+                      update({ contours: { ...config.contours, enabled: e.target.checked } })
+                    }
+                  />
+                  Contours
+                </label>
+                <p className="field__hint">
+                  Reads relief at a glance. Most useful in the single-colour modes, where
+                  otherwise only the silhouette shows it.
+                </p>
+              </div>
+
+              {config.contours.enabled ? (
+                <>
+                  <div className="field">
+                    <label className="field__label" htmlFor="contour-style">
+                      Contour style
+                    </label>
+                    <select
+                      id="contour-style"
+                      className="select"
+                      value={config.contours.style}
+                      disabled={busy}
+                      onChange={(e) =>
+                        update({
+                          contours: {
+                            ...config.contours,
+                            style: e.target.value === 'lines' ? 'lines' : 'terraced',
+                          },
+                        })
+                      }
+                    >
+                      <option value="terraced">Terraced — stepped shelves</option>
+                      <option value="lines">Lines — raised rings</option>
+                    </select>
+                    <p className="field__hint">
+                      {config.contours.style === 'terraced'
+                        ? 'The terrain itself becomes flat shelves with a step between each, the way a laser-cut plywood relief map is built. The step edge is the contour, so there is nothing thin to print.'
+                        : 'Traces the contours and raises them as thin rings on the smooth terrain. Technically correct, but at a nozzle wide they read as roads wandering across the slope.'}
+                    </p>
+                  </div>
+
+                  <div className="field">
+                    <label className="field__label">
+                      {config.contours.style === 'terraced' ? 'Step height' : 'Contour interval'}
+                      <span className="field__unit">m</span>
+                    </label>
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={config.contours.interval_m === 'auto'}
+                        disabled={busy}
+                        onChange={(e) =>
+                          update({
+                            contours: {
+                              ...config.contours,
+                              interval_m: e.target.checked ? 'auto' : 100,
+                            },
+                          })
+                        }
+                      />
+                      Auto (sized so the rings stay apart on this terrain)
+                    </label>
+                  </div>
+                  {config.contours.interval_m === 'auto' ? null : (
+                    <NumberField
+                      label="Metres between rings"
+                      unit="m"
+                      value={config.contours.interval_m}
+                      min={5}
+                      max={500}
+                      step={5}
+                      disabled={busy}
+                      onChange={(v) => update({ contours: { ...config.contours, interval_m: v } })}
+                      hint={
+                        bundle
+                          ? `This area spans ${formatElevation(
+                              bundle.stats.elevationRange_m[1] - bundle.stats.elevationRange_m[0],
+                              unit,
+                            )}.`
+                          : 'Real metres of elevation between rings.'
+                      }
+                    />
+                  )}
+                  <NumberField
+                    label="Contour height"
+                    unit="mm"
+                    value={config.contours.lineHeight_mm}
+                    min={0.2}
+                    max={3}
+                    step={0.1}
+                    disabled={busy}
+                    onChange={(v) => update({ contours: { ...config.contours, lineHeight_mm: v } })}
+                    hint="How far each ring stands above the terrain."
+                  />
+                </>
+              ) : null}
+
+              <div className="field">
+                <label className="field__label" htmlFor="colormode">
+                  Colour mode
+                </label>
+                <select
+                  id="colormode"
+                  className="select"
+                  value={config.colorMode}
+                  onChange={(e) => update({ colorMode: e.target.value as ColorMode })}
+                  disabled={busy}
+                >
+                  <option value="multicolor">Multicolour — one object per layer</option>
+                  <option value="single-raised">Single colour, raised route</option>
+                  <option value="single-cutout">Single colour, route cut out</option>
+                </select>
+                <p className="field__hint">
+                  {config.colorMode === 'multicolor'
+                    ? 'Every layer stays a separate object. Export 3MF and the slicer assigns a filament to each.'
+                    : config.colorMode === 'single-raised'
+                      ? 'Everything merges into one body, with the route standing proud. Legible by relief alone — raise the route height for a stronger read.'
+                      : 'The route is cut out of the terrain, leaving a channel to paint or fill.'}
+                </p>
+              </div>
+
+              {config.colorMode === 'single-cutout' ? (
+                <>
+                  <div className="field">
+                    <label className="field__label" htmlFor="submode">
+                      Cutout style
+                    </label>
+                    <select
+                      id="submode"
+                      className="select"
+                      value={config.cutout.subMode}
+                      onChange={(e) =>
+                        update({
+                          cutout: { ...config.cutout, subMode: e.target.value as CutoutSubMode },
+                        })
+                      }
+                      disabled={busy}
+                    >
+                      <option value="groove">Groove — channel only, to paint or fill</option>
+                      <option value="inlay">Inlay — plus a separate insert to press in</option>
+                    </select>
+                    <p className="field__hint">
+                      {config.cutout.subMode === 'groove'
+                        ? 'One body with a recessed channel.'
+                        : 'Two bodies: the terrain with a cavity, and the route insert to print in a second colour.'}
+                    </p>
+                  </div>
+
+                  <NumberField
+                    label="Channel depth"
+                    unit="mm"
+                    value={config.cutout.insetDepth_mm}
+                    min={0.3}
+                    max={4}
+                    step={0.1}
+                    disabled={busy}
+                    onChange={(v) => update({ cutout: { ...config.cutout, insetDepth_mm: v } })}
+                    hint="Measured below the lowest ground the route crosses — the floor is flat so the insert seats without supports."
+                  />
+
+                  {config.cutout.subMode === 'inlay' ? (
+                    <>
+                      <NumberField
+                        label="Clearance"
+                        unit="mm"
+                        value={config.cutout.clearance_mm}
+                        min={0.05}
+                        max={0.5}
+                        step={0.05}
+                        disabled={busy}
+                        onChange={(v) => update({ cutout: { ...config.cutout, clearance_mm: v } })}
+                        hint="Gap per side. Too tight and the insert will not seat; too loose and it rattles. 0.15 mm is the usual FDM press fit."
+                      />
+                      <p className="field__hint">
+                        How far the insert stands out of the channel is the route&rsquo;s
+                        <strong> Height</strong>, under Routes. Zero seats it flush.
+                      </p>
+                    </>
+                  ) : null}
+
+                  <div className="field">
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={config.cutout.water}
+                        disabled={busy || !config.layers['water']?.enabled}
+                        onChange={(e) =>
+                          update({ cutout: { ...config.cutout, water: e.target.checked } })
+                        }
+                      />
+                      Cut the water out too
+                    </label>
+                    <p className="field__hint">
+                      {!config.layers['water']?.enabled
+                        ? 'Turn the Water layer on under Layers, and lakes and rivers can be cut out as well.'
+                        : config.cutout.subMode === 'inlay'
+                          ? 'Lakes and rivers become a basin plus a second insert, to print in blue and press in. Its top is flat — water is level, whatever the ground under it does.'
+                          : 'Lakes and rivers become a recessed basin to paint or fill. Switch Cutout style to Inlay to get a piece to press in instead.'}
+                    </p>
+                  </div>
+                </>
+              ) : null}
+
+              <div className="field">
+                <label className="field__label" htmlFor="bed">
+                  Printer bed
+                </label>
+                <select
+                  id="bed"
+                  className="select"
+                  value={printerId ?? 'none'}
+                  onChange={(e) =>
+                    update({
+                      bedSize_mm: BED_PRESETS.find((b) => b.id === e.target.value)?.size ?? null,
+                    })
+                  }
+                  disabled={busy}
+                >
+                  {BED_PRESETS.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="field__hint">
+                  Warns when the model will not fit. Never blocks — printing in sections is a
+                  perfectly good plan.
+                </p>
+              </div>
+
+              <div className="field">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={config.tiling.enabled}
+                    disabled={busy || !config.bedSize_mm}
+                    onChange={(e) => update({ tiling: { enabled: e.target.checked } })}
+                  />
+                  Split to fit the bed
+                </label>
+                <p className="field__hint">
+                  {!config.bedSize_mm
+                    ? 'Pick a printer bed above, and this can cut an oversized model into pieces that fit it.'
+                    : 'Cuts an oversized model into a grid of bed-sized pieces, each exported ready to print. A model that already fits is left alone. Seams are flat butt joints — glue them; there are no alignment pins yet.'}
+                </p>
+              </div>
             </section>
-          ) : null}
 
-          <ProjectPanel
-            busy={busy}
-            settings={settings}
-            routeCount={routes.length}
-            onSave={onSaveProject}
-            onLoad={(file) => void onLoadProject(file)}
-            onCopyLink={onCopyLink}
-            onApplyPreset={onApplyPreset}
-          />
+            </Section>
 
-          {bundle ? <Results bundle={bundle} dirty={dirty} unit={unit} /> : null}
-          {error ? (
+            <Section
+              id="terrain"
+              title="Terrain"
+              hint={`${config.verticalExaggeration.toFixed(1)}x relief`}
+              icon={ICONS.terrain}
+              open={openGroup === 'terrain'}
+              onToggle={() => toggleGroup('terrain')}
+            >
+            <SunControl
+              sun={sun}
+              onChange={setSun}
+              enabled={terrain3d}
+              onEnabledChange={setTerrain3d}
+            />
+
             <section>
-              <div className={`alert alert--${error.level}`}>{error.text}</div>
+              <NumberField
+                label="Vertical exaggeration"
+                unit="×"
+                value={config.verticalExaggeration}
+                min={0.5}
+                max={5}
+                step={0.1}
+                disabled={busy}
+                onChange={(v) => update({ verticalExaggeration: v })}
+                hint="Flat city 2.5–4×, rolling hills 1.5–2×, alpine 1.0–1.5×."
+              />
+              <NumberField
+                label="Max height"
+                unit="mm"
+                value={config.maxHeight_mm}
+                min={2}
+                max={100}
+                step={1}
+                disabled={busy}
+                onChange={(v) => update({ maxHeight_mm: v })}
+                hint="Clamps the tallest peak. Exaggeration is reduced to fit."
+              />
+              <div className="field">
+                <label className="field__label">
+                  Sampling step<span className="field__unit">m</span>
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={autoResolution}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setAutoResolution(e.target.checked);
+                      update({
+                        resolution_m: e.target.checked ? 'auto' : (gridPreview?.resolution_m ?? 30),
+                      });
+                    }}
+                  />
+                  Auto
+                </label>
+              </div>
+              {!autoResolution ? (
+                <NumberField
+                  label="Resolution"
+                  unit="m/px"
+                  value={typeof config.resolution_m === 'number' ? config.resolution_m : 30}
+                  min={5}
+                  max={500}
+                  step={1}
+                  disabled={busy}
+                  onChange={(v) => update({ resolution_m: v })}
+                />
+              ) : null}
+              <NumberField
+                label="Smoothing"
+                value={config.smoothing}
+                min={0}
+                max={5}
+                step={1}
+                disabled={busy}
+                onChange={(v) => update({ smoothing: v })}
+                hint="Laplacian passes. Flattens genuine features — default 0."
+              />
             </section>
-          ) : null}
+
+            </Section>
+
+            <Section
+              id="export"
+              title="Print & export"
+              hint={bundle ? 'Ready' : 'Nothing built yet'}
+              icon={ICONS.export}
+              open={openGroup === 'export'}
+              onToggle={() => toggleGroup('export')}
+            >
+              <EstimatePanel
+                printerLabel={
+                  BED_PRESETS.find((b) => b.id === printerId)?.label.replace(/ \(.*/, '') ?? null
+                }
+                measures={bundle?.measures ?? null}
+                settings={filament}
+                onChange={(patch) => setFilament((c) => ({ ...c, ...patch }))}
+                layerHeight_mm={config.layerHeight_mm}
+                nozzleDiameter_mm={config.nozzleDiameter_mm}
+                stale={dirty}
+              />
+
+            <ProjectPanel
+              busy={busy}
+              settings={settings}
+              routeCount={routes.length}
+              onSave={onSaveProject}
+              onLoad={(file) => void onLoadProject(file)}
+              onCopyLink={onCopyLink}
+              onApplyPreset={onApplyPreset}
+            />
+
+            </Section>
+
+          </div>
+
+          <div className="panel__pinned">
+            {gridPreview ? (
+              <section>
+                <h2>Before you generate</h2>
+                <dl className="stats">
+                  <dt>Real extent</dt>
+                  <dd>
+                    {formatExtent(gridPreview.extentX_m / 1000, gridPreview.extentY_m / 1000, unit)}
+                  </dd>
+                  <dt>Sampling step</dt>
+                  <dd>
+                    {formatGroundLength(gridPreview.resolution_m, unit)}
+                    {gridPreview.resolutionNozzleLimited ? (
+                      <span className="badge">nozzle-limited</span>
+                    ) : null}
+                  </dd>
+                  <dt>Grid</dt>
+                  <dd>
+                    {gridPreview.cols} × {gridPreview.rows}
+                  </dd>
+                  {osmPlan ? (
+                    <>
+                      <dt>Map data</dt>
+                      <dd>
+                        {osmPlan.single
+                          ? '1 request'
+                          : `${osmPlan.tiles} requests · about ${fetchTimeLabel(osmPlan.seconds)}, longer if OpenStreetMap is busy`}
+                        {osmPlan.tiles >= HUGE_FETCH_TILES ? (
+                          <span className="badge badge--huge">too many</span>
+                        ) : osmPlan.seconds >= SLOW_FETCH_S ? (
+                          <span className="badge badge--slow">slow</span>
+                        ) : null}
+                      </dd>
+                    </>
+                  ) : null}
+                </dl>
+                {/* The indicator, not a refusal. A 100 km route genuinely needs
+                    this many requests and OpenStreetMap will only take them at
+                    its own pace; someone told that up front waits, while someone
+                    told nothing assumes it has hung and cancels. Two tiers,
+                    because "leave it running" stops being true somewhere. */}
+                {osmPlan && osmPlan.tiles >= HUGE_FETCH_TILES ? (
+                  <p className="note note--warn">
+                    More than OpenStreetMap will serve in one run. The terrain builds
+                    regardless — untick layers or shrink the selection for the map features.
+                  </p>
+                ) : osmPlan && osmPlan.seconds >= SLOW_FETCH_S ? (
+                  <p className="note">
+                    Fetched in {osmPlan.tiles} pieces, paced so OpenStreetMap keeps
+                    answering. It will finish — leave it running.
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+
+            {bundle ? <Results bundle={bundle} dirty={dirty} unit={unit} /> : null}
+            {error ? (
+              <section>
+                <div className={`alert alert--${error.level}`}>{error.text}</div>
+              </section>
+            ) : null}
+          </div>
         </aside>
+        )}
 
         <main className="viewport">
           <div className={view === 'map' ? 'stage' : 'stage stage--hidden'}>
@@ -1814,6 +1946,15 @@ export function App() {
           <button
             type="button"
             className="btn btn--link"
+            title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
+            aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}
+            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+          >
+            {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+          </button>
+          <button
+            type="button"
+            className="btn btn--link"
             title="Units for distances and elevations. Print sizes are always millimetres."
             onClick={() => {
               const next: DistanceUnit = unit === 'metric' ? 'imperial' : 'metric';
@@ -1836,6 +1977,34 @@ export function App() {
         </span>
       </footer>
     </div>
+  );
+}
+
+/** The sidebar collapse glyph: a panel with its left column marked. */
+function PanelIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden>
+      <rect x="2" y="3" width="12" height="10" rx="2" />
+      <path d="M6.2 3v10" />
+    </svg>
+  );
+}
+
+/** Theme switch glyphs. Two shapes, drawn to the same 14px grid as the rest. */
+function MoonIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M13.5 9.5A5.8 5.8 0 016.5 2.5a5.8 5.8 0 100 11 5.8 5.8 0 007-4z" />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden>
+      <circle cx="8" cy="8" r="3.1" />
+      <path d="M8 1.4v1.5M8 13.1v1.5M1.4 8h1.5M13.1 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M12.6 3.4l-1 1M4.4 11.6l-1 1" />
+    </svg>
   );
 }
 

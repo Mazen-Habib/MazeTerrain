@@ -167,6 +167,7 @@ export function MapView({
   };
 
   const scaleControl = useRef<maplibregl.ScaleControl | null>(null);
+  const resizeObserver = useRef<ResizeObserver | null>(null);
 
   const setData = useCallback((id: string, data: GeoJSON.GeoJSON) => {
     const source = map.current?.getSource(id) as maplibregl.GeoJSONSource | undefined;
@@ -377,6 +378,19 @@ export function MapView({
       // eslint-disable-next-line no-console
       console.error('[map]', e.error?.message ?? e);
     });
+
+    /*
+     * Follow the container's size, not just the window's.
+     *
+     * MapLibre resizes itself on `window.resize` and nothing else, so a layout
+     * change that alters the canvas without altering the window leaves it
+     * rendering at the old size — which showed up the moment the sidebar
+     * gained a collapsed rail: the map kept the narrower width and left a black
+     * band where the panel used to be.
+     */
+    const observer = new ResizeObserver(() => m.resize());
+    observer.observe(container.current);
+    resizeObserver.current = observer;
 
     m.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
     // Kept on the ref so the units toggle can retune it without rebuilding the
@@ -607,6 +621,8 @@ export function MapView({
 
     return () => {
       window.removeEventListener('keydown', onKey);
+      resizeObserver.current?.disconnect();
+      resizeObserver.current = null;
       m.remove();
       map.current = null;
       ready.current = false;

@@ -204,14 +204,14 @@ export function SunControl({ sun, onChange, enabled, onEnabledChange }: SunContr
             {/* Night at the rim, day at the centre: the gradient IS the altitude
                 axis, so the sun's height reads before the numbers do. */}
             <radialGradient id="sunSky" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#1a1140" />
-              <stop offset="55%" stopColor="#5b2a9e" />
-              <stop offset="100%" stopColor="#8b3bc4" />
+              <stop offset="0%" stopColor="var(--sun-sky-0)" />
+              <stop offset="55%" stopColor="var(--sun-sky-1)" />
+              <stop offset="100%" stopColor="var(--sun-sky-2)" />
             </radialGradient>
             <radialGradient id="sunGlow" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#ffd27a" />
-              <stop offset="60%" stopColor="#ff9d33" />
-              <stop offset="100%" stopColor="#ff8c1a" />
+              <stop offset="0%" stopColor="#ffd9a3" />
+              <stop offset="60%" stopColor="#ffab4d" />
+              <stop offset="100%" stopColor="var(--accent)" />
             </radialGradient>
           </defs>
 
