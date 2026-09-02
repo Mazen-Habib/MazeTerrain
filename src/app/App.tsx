@@ -936,6 +936,18 @@ export function App() {
             <PanelIcon />
           </button>
           Peakora <span className="topbar__phase">Phase 2</span>
+          {SUPPORT_URL ? (
+            <a
+              className="topbar__social"
+              href={SUPPORT_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+              title="Peakora on Instagram"
+              aria-label="Peakora on Instagram"
+            >
+              <InstagramIcon />
+            </a>
+          ) : null}
         </h1>
 
         <div className="viewtoggle" role="tablist">
@@ -958,6 +970,31 @@ export function App() {
         </div>
 
         <div className="topbar__actions">
+          {/* A utility, so it sits before the action pair rather than after it:
+              Generate and Export stay together at the end of the bar. */}
+          <div className="themeswitch" role="radiogroup" aria-label="Theme">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={theme === 'light'}
+              className={theme === 'light' ? 'themeswitch__on' : ''}
+              onClick={() => setTheme('light')}
+            >
+              <SunIcon />
+              Light
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={theme === 'dark'}
+              className={theme === 'dark' ? 'themeswitch__on' : ''}
+              onClick={() => setTheme('dark')}
+            >
+              <MoonIcon />
+              Dark
+            </button>
+          </div>
+
           {bundle && !dirty ? <span className="badge badge--ok">Up to date</span> : null}
           <button
             className={`btn${dirty && shape ? ' btn--accent' : ''}`}
@@ -994,22 +1031,23 @@ export function App() {
           />
         ) : (
         <aside className="panel">
-          {/* Pinned above the groups, deliberately outside the accordion.
-              The sun drives the live map shading, so it is adjusted WHILE
-              looking at the map rather than while setting something up — and a
-              control you reach for constantly does not belong behind a
-              disclosure. It is also the only control here that changes nothing
-              about the printed model. */}
-          <div className="panel__top">
-            <SunControl
-              sun={sun}
-              onChange={setSun}
-              enabled={terrain3d}
-              onEnabledChange={setTerrain3d}
-            />
-          </div>
-
           <div className="panel__scroll">
+            {/* First in the panel, and INSIDE the scroll: always the first thing
+                you see, but it scrolls away with everything else rather than
+                holding a fixed slice of the sidebar. It sits outside the
+                accordion because it drives the live map shading — adjusted
+                while looking at the map, not while setting something up — and
+                it is the only control here that changes nothing about the
+                printed model. */}
+            <div className="panel__top">
+              <SunControl
+                sun={sun}
+                onChange={setSun}
+                enabled={terrain3d}
+                onEnabledChange={setTerrain3d}
+              />
+            </div>
+
             <Section
               id="place"
               title="Place"
@@ -1809,31 +1847,6 @@ export function App() {
               </section>
             ) : null}
           </div>
-
-          <div className="panel__foot">
-            <div className="themeswitch" role="radiogroup" aria-label="Theme">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={theme === 'light'}
-                className={theme === 'light' ? 'themeswitch__on' : ''}
-                onClick={() => setTheme('light')}
-              >
-                <SunIcon />
-                Light
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={theme === 'dark'}
-                className={theme === 'dark' ? 'themeswitch__on' : ''}
-                onClick={() => setTheme('dark')}
-              >
-                <MoonIcon />
-                Dark
-              </button>
-            </div>
-          </div>
         </aside>
         )}
 
@@ -2004,6 +2017,37 @@ export function App() {
   );
 }
 
+/**
+ * Instagram, drawn rather than imported, and in its own colours.
+ *
+ * The only place in the app that breaks the white/black/orange rule, and
+ * deliberately: a brand mark recoloured to fit a palette stops being the brand
+ * mark. Everything else on screen still obeys it, which is what keeps the
+ * exception from reading as inconsistency.
+ *
+ * The gradient is the corner-to-corner one Instagram uses, so the warm end sits
+ * at the bottom left as it does in the real glyph. Three shapes on the same 16
+ * grid and stroke weight as every other icon in the bar.
+ */
+function InstagramIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <defs>
+        <linearGradient id="igGrad" x1="1" y1="15" x2="15" y2="1">
+          <stop offset="0%" stopColor="#FEDA75" />
+          <stop offset="25%" stopColor="#FA7E1E" />
+          <stop offset="55%" stopColor="#D62976" />
+          <stop offset="80%" stopColor="#962FBF" />
+          <stop offset="100%" stopColor="#4F5BD5" />
+        </linearGradient>
+      </defs>
+      <rect x="2.1" y="2.1" width="11.8" height="11.8" rx="3.5" stroke="url(#igGrad)" />
+      <circle cx="8" cy="8" r="2.9" stroke="url(#igGrad)" />
+      <circle cx="11.5" cy="4.5" r="0.85" fill="url(#igGrad)" />
+    </svg>
+  );
+}
+
 /** The sidebar collapse glyph: a panel with its left column marked. */
 function PanelIcon() {
   return (
@@ -2018,7 +2062,10 @@ function PanelIcon() {
 function MoonIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M13.5 9.5A5.8 5.8 0 016.5 2.5a5.8 5.8 0 100 11 5.8 5.8 0 007-4z" />
+      {/* Sized to leave a stroke's worth of margin inside the 16 box. The
+          previous crescent reached x=13.5 and y=13.5, so half the 1.4 stroke
+          fell outside the viewBox and the moon came out clipped. */}
+      <path d="M14 8.53A6 6 0 117.47 2 4.67 4.67 0 0014 8.53z" />
     </svg>
   );
 }

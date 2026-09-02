@@ -183,6 +183,34 @@ body {
   margin-right: 2px;
 }
 
+/*
+ * Beside the wordmark, so it reads as "whose app this is" rather than as a
+ * control. No box and no background: it is a mark, not a button, and a chip
+ * around it would give it the weight of the actions at the other end of the
+ * bar. Its colour comes from the gradient inside the SVG.
+ */
+.topbar__social {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  opacity: 0.85;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.topbar__social:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topbar__social {
+    transition: opacity 120ms ease;
+  }
+  .topbar__social:hover {
+    transform: none;
+  }
+}
+
 .topbar__phase {
   padding: 2px 7px;
   border-radius: var(--r-pill);
@@ -362,15 +390,18 @@ body {
 }
 
 /*
- * Pinned above the groups: the sun dial.
+ * The sun dial: first in the panel, and inside the scroll.
  *
- * It is adjusted while looking at the map, not while setting something up, and
- * a control reached for that often does not belong behind a disclosure. It is
- * also the only thing in the panel that changes nothing about the printed
- * model, which is its own argument for keeping it out of the build workflow.
+ * It sits outside the accordion because it drives the live map shading —
+ * adjusted while looking at the map, not while setting something up — and it is
+ * the only thing in the panel that changes nothing about the printed model.
+ *
+ * But it scrolls with the rest rather than holding a fixed slice of the
+ * sidebar. Pinned, it cost ~150px permanently even when the work in hand was
+ * three groups further down; a control that is merely first does not need to be
+ * always present.
  */
 .panel__top {
-  flex: 0 0 auto;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
 }
@@ -380,17 +411,17 @@ body {
   line-height: 1.4;
 }
 
-/* The theme switch lives at the foot, where the reference design puts it. */
-.panel__foot {
-  flex: 0 0 auto;
-  padding: 10px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
-
+/*
+ * The theme switch, in the top bar.
+ *
+ * Built as a segmented control rather than one icon that flips: a toggle whose
+ * only state indicator is which glyph it currently shows is a puzzle, and this
+ * one went unfound as exactly that. Both options visible, the active one
+ * marked, and it matches the Map / 3D switch beside it.
+ */
 .themeswitch {
   display: flex;
-  gap: 3px;
+  gap: 2px;
   padding: 3px;
   border-radius: var(--r-md);
   background: var(--surface-2);
@@ -400,9 +431,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  flex: 1;
-  padding: 6px 10px;
+  gap: 5px;
+  padding: 5px 10px;
   border: none;
   border-radius: var(--r-sm);
   background: none;
@@ -412,6 +442,13 @@ body {
   font-weight: 500;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
+}
+
+/* An SVG is a flex item and will happily be squashed narrower than its own
+   viewBox, which crops the glyph rather than scaling it. */
+.themeswitch svg {
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
 .themeswitch button:hover:not(.themeswitch__on) {
@@ -510,7 +547,10 @@ body {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 11px 14px;
+  /* Tight rather than roomy. Six headers with a title and a hint each add up
+     fast, and the sidebar's job is to get you to the control, not to display
+     the headers. */
+  padding: 7px 14px;
   border: none;
   background: none;
   color: var(--text);
@@ -538,7 +578,6 @@ body {
 .group__label {
   display: flex;
   flex-direction: column;
-  gap: 1px;
   flex: 1;
   min-width: 0;
 }
@@ -549,13 +588,15 @@ body {
   gap: 6px;
   font-size: 13px;
   font-weight: 550;
+  line-height: 1.35;
   letter-spacing: -0.005em;
 }
 
 /* Shown only while closed: what is inside, so nothing has to be opened to
    find out what it holds. */
 .group__hint {
-  font-size: 11.5px;
+  font-size: 11px;
+  line-height: 1.3;
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -591,7 +632,7 @@ body {
 }
 
 .group__body {
-  padding: 2px 14px 16px;
+  padding: 2px 14px 14px;
   animation: group-in 160ms ease;
 }
 
@@ -619,8 +660,8 @@ body {
 }
 
 .group__body > section + section {
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 14px;
+  padding-top: 13px;
   border-top: 1px solid var(--line);
 }
 
@@ -686,7 +727,7 @@ body {
 }
 
 .field {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .field--disabled {
