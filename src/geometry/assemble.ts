@@ -44,10 +44,16 @@ import {
 import { fetchOsm, OverpassError } from '../data/osm/overpass';
 import { normalise } from '../data/osm/normalise';
 import { LAYER_BY_ID, type LayerId } from '../data/osm/tags';
-import { bboxRingWorld, selectionRingWorld, type SelectionShape } from './selection';
+import {
+  bboxRingWorld,
+  boxIntersectsRing,
+  selectionRingWorld,
+  type SelectionShape,
+} from './selection';
 import type { Ring } from './polygons';
 import type { Route } from '../data/gpx/types';
 import type {
+  BBox,
   GenerateConfig,
   GenerateRequest,
   LayerBuildSummary,
@@ -466,8 +472,16 @@ export async function assemble(
 
     try {
       const servers = new Set<string>();
+      // Skip tiles the selection never reaches. The grid covers the bounding
+      // box, and a circle inscribed in its box leaves a fifth of that box
+      // empty — dozens of requests, on the grid an ultramarathon needs.
+      const keepTile = selectionRing
+        ? (tile: BBox) => boxIntersectsRing(tile, selectionRing)
+        : undefined;
+
       const response = await fetchOsm(config.bbox, enabledLayers, {
         ...(signal ? { signal } : {}),
+        ...(keepTile ? { keepTile } : {}),
         onAttempt: (detail) => report({ stage: 'fetching-osm', percent: TERRAIN_END, detail }),
         onEndpoint: (hostname) => servers.add(hostname),
         onPartial: ({ fetched, total, stoppedEarly }) =>
@@ -475,11 +489,11 @@ export async function assemble(
             level: 'warn',
             code: 'osm-partial',
             message: stoppedEarly
-              ? `OpenStreetMap stopped answering after ${fetched} of ${total} areas, so the ` +
-                `rest were not attempted — continuing would only deepen the block. What did ` +
-                `load is in this model and is cached: wait a few minutes and press Generate ` +
-                `again to fill in the rest, or use a smaller selection, which needs far ` +
-                `fewer requests.`
+              ? `OpenStreetMap ran out of capacity after ${fetched} of ${total} areas and ` +
+                `stopped advertising when more would be free, so the rest were not ` +
+                `attempted. The ${fetched} that loaded are in this model and cached: press ` +
+                `Generate again and it resumes from there — cached areas cost no request ` +
+                `and no delay, so each attempt gets further.`
               : `${total - fetched} of ${total} areas did not load, so parts of the map may ` +
                 `be missing features. What did load is cached — press Generate again to ` +
                 `retry just the gaps.`,

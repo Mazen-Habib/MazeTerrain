@@ -112,6 +112,40 @@ const TILE_DEG = 0.08;
 const TILE_GAP_MS = 1500;
 
 /**
+ * What one tile query typically costs, for the up-front estimate only.
+ *
+ * Measured across the Islamabad runs in `09-roadmap.md`: 12 tiles in 37.9 s and
+ * 25 in 118.4 s, which net of the gap is roughly 1.7 s and 3.2 s per query. The
+ * higher figure, because an estimate that runs under is worse than one that
+ * runs over — someone told four minutes and kept waiting nine concludes it has
+ * hung.
+ */
+const TYPICAL_QUERY_MS = 3200;
+
+/**
+ * How long the whole fetch may spend WAITING for Overpass slots.
+ *
+ * A 100 km ultramarathon needs a selection around 1 degree across, which is
+ * ~150 tiles. That cannot be fetched in a burst and it cannot be fetched in
+ * thirty seconds; the honest options are "take several minutes" or "refuse".
+ * The owner asked for the first, so this is the ceiling on the waiting part.
+ *
+ * Waiting is not the same as hammering. Every wait here is the length the
+ * server itself advertised through `/api/status`, so the client is queueing
+ * politely rather than retrying blind — which is the distinction that makes a
+ * long run acceptable to a public instance at all.
+ */
+const SLOT_WAIT_BUDGET_MS = 20 * 60 * 1000;
+
+/**
+ * Longest single wait we will honour from `/api/status`.
+ *
+ * A congested instance can advertise several minutes. Waiting that long on one
+ * tile is worse than moving to the next endpoint, which may be free.
+ */
+const MAX_SINGLE_SLOT_WAIT_MS = 90_000;
+
+/**
  * Consecutive tile failures before the whole fetch gives up.
  *
  * Measured 2026-08-30, and this app did it to itself: `overpass-api.de` was
@@ -132,6 +166,61 @@ const CONSECUTIVE_TILE_FAILURES = 3;
 
 /** docs/03-architecture.md caching table: OSM responses for 7 days. */
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long until this instance will accept another query, in ms.
+ *
+ * Overpass publishes a plain-text `/api/status` describing its slot pool: how
+ * many are free now, and when the next one frees if none are. Reading it turns
+ * a rate limit from a failure into a wait of known length — which is the whole
+ * reason a 150-tile build can now finish instead of stopping at twelve.
+ *
+ * The format is not versioned and not machine-oriented, so this parses
+ * defensively and returns 0 (meaning "just try") on anything it does not
+ * recognise. Being wrong here costs one wasted request, not a build.
+ */
+export function parseSlotWait(text: string): number {
+  // "2 slots available now." — nothing to wait for.
+  const now = /(\d+)\s+slots?\s+available\s+now/i.exec(text);
+  if (now && Number(now[1]) > 0) return 0;
+
+  // "Slot available after: 2026-09-02T10:01:23Z, in 83 seconds." One line per
+  // queued slot; the soonest is the one that matters.
+  let soonest = Infinity;
+  const pattern = /in\s+(-?\d+)\s+seconds?/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const seconds = Number(match[1]);
+    // A negative figure means the slot freed while the response was in flight.
+    if (Number.isFinite(seconds)) soonest = Math.min(soonest, Math.max(0, seconds));
+  }
+
+  return Number.isFinite(soonest) ? soonest * 1000 : 0;
+}
+
+/**
+ * Ask an instance when it will next take a query.
+ *
+ * Never throws. A status endpoint that is down, slow or unparseable must not
+ * be the thing that fails a build — the caller falls back to its own backoff.
+ */
+async function slotWaitMs(
+  endpoint: string,
+  doFetch: typeof fetch,
+  signal?: AbortSignal,
+): Promise<number> {
+  try {
+    const url = new URL(endpoint);
+    url.pathname = url.pathname.replace(/\/interpreter\/?$/, '/status');
+    const res = await doFetch(url.toString(), signal ? { signal } : {});
+    if (!res.ok) return 0;
+    return Math.min(parseSlotWait(await res.text()), MAX_SINGLE_SLOT_WAIT_MS);
+  } catch {
+    // Including an abort: the caller checks its own signal on the next pass,
+    // and swallowing it here only costs one loop iteration.
+    return 0;
+  }
+}
 
 
 export class OverpassError extends Error {
@@ -335,6 +424,33 @@ export interface FetchOsmOptions {
    * far more than no model, and the caller is the one that can say so in words.
    */
   onPartial?: (info: { fetched: number; total: number; stoppedEarly: boolean }) => void;
+  /** Fired when a tile came from the cache, so the caller can skip its gap. */
+  onCacheHit?: () => void;
+  /**
+   * Keep only the tiles this returns true for.
+   *
+   * The tile grid covers the selection's BOUNDING BOX, and a circle inscribed
+   * in its box leaves 21% of that box empty — on a 150-tile ultramarathon
+   * selection that is over thirty requests spent on ground the model does not
+   * contain. The predicate is supplied by the caller because it is the only
+   * thing that knows the selection's real outline.
+   */
+  keepTile?: (tile: BBox) => boolean;
+  /**
+   * Progress, once per tile, with enough to show a remaining time.
+   *
+   * `waitingMs` is time spent queueing for an Overpass slot rather than
+   * fetching, which the UI reports separately: "waiting for OpenStreetMap" and
+   * "downloading" mean different things to someone deciding whether to cancel.
+   */
+  onTile?: (info: {
+    done: number;
+    total: number;
+    fromCache: number;
+    waitingMs: number;
+  }) => void;
+  /** Injected in tests so the suite does not sit through slot waits. */
+  slotWaitBudgetMs?: number;
 }
 
 /**
@@ -355,7 +471,10 @@ async function fetchOne(
 
   const key = extractKey(bbox, layers);
   const cached = await readCache(key);
-  if (cached) return cached;
+  if (cached) {
+    options.onCacheHit?.();
+    return cached;
+  }
 
   const doFetch = options.fetchImpl ?? fetch;
   const backoff = options.backoffMs ?? BASE_BACKOFF_MS;
@@ -452,6 +571,35 @@ export function mergeResponses(responses: OverpassResponse[]): OverpassResponse 
 
 
 /**
+ * How many requests a selection will cost, and roughly how long.
+ *
+ * Wanted before the build starts, not during it: a 150-tile ultramarathon
+ * selection is a several-minute fetch, and someone who is told that up front
+ * waits, while someone who is not assumes it has hung. The number also tells
+ * them plainly that shrinking the selection is the cheap fix, without the app
+ * having to refuse anything.
+ *
+ * The time is arithmetic on the politeness gap and a measured per-query cost,
+ * so it is an order-of-magnitude figure, not a promise. Cached areas are free
+ * and are excluded by the caller, which is why a resume reports much less.
+ */
+export function planOsmTiles(
+  bbox: BBox,
+  keepTile?: (tile: BBox) => boolean,
+): { tiles: number; seconds: number; single: boolean } {
+  if (bboxArea_km2(bbox) <= MAX_SINGLE_QUERY_KM2) {
+    return { tiles: 1, seconds: TYPICAL_QUERY_MS / 1000, single: true };
+  }
+  const all = tileBBox(bbox);
+  const tiles = keepTile ? all.filter(keepTile).length : all.length;
+  return {
+    tiles,
+    seconds: Math.round((tiles * (TILE_GAP_MS + TYPICAL_QUERY_MS)) / 1000),
+    single: false,
+  };
+}
+
+/**
  * Fetch every OSM feature in a bbox, splitting large areas into tiles.
  *
  * Small selections keep the exact-bbox single query, which is the cheapest
@@ -475,11 +623,21 @@ export async function fetchOsm(
     return fetchOne(bbox, layers, options);
   }
 
-  const tiles = tileBBox(bbox);
+  // Drop tiles the selection does not actually reach. A circle inscribed in
+  // its bounding box leaves 21% of the grid empty, and on a selection this
+  // large that is dozens of requests spent on ground the model excludes.
+  const allTiles = tileBBox(bbox);
+  const tiles = options.keepTile ? allTiles.filter(options.keepTile) : allTiles;
+  if (tiles.length === 0) return { elements: [] };
+
   let done = 0;
   let failed = 0;
+  let fromCache = 0;
   let consecutiveFailures = 0;
   let stoppedEarly = false;
+  let waitingMs = 0;
+  const waitBudgetMs = options.slotWaitBudgetMs ?? SLOT_WAIT_BUDGET_MS;
+  const doFetch = options.fetchImpl ?? fetch;
   const responses: OverpassResponse[] = [];
 
   // Deliberately NOT fail-fast. `pooled` used to reject on the first tile that
@@ -491,17 +649,44 @@ export async function fetchOsm(
   for (let index = 0; index < tiles.length; index++) {
     if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-    // Stop rather than keep hammering. See CONSECUTIVE_TILE_FAILURES.
+    // A run of failures means the pool is dry, not that one tile is unlucky.
+    //
+    // This used to give up here, because grinding on deepens a block. It no
+    // longer has to: ask the instance when it will next take a query and wait
+    // exactly that long. Queueing for an advertised slot is not hammering, and
+    // it is the difference between a 150-tile ultramarathon selection finishing
+    // and stopping at twelve.
     if (consecutiveFailures >= CONSECUTIVE_TILE_FAILURES) {
-      stoppedEarly = true;
-      break;
+      const wait = waitingMs < waitBudgetMs
+        ? await slotWaitMs(OVERPASS_ENDPOINTS[preferredEndpoint], doFetch, options.signal)
+        : 0;
+
+      // No slot advertised, or the budget is spent. Either way there is nothing
+      // left to wait FOR, so stop with what arrived rather than grind.
+      if (wait <= 0) {
+        stoppedEarly = true;
+        break;
+      }
+
+      options.onAttempt?.(
+        `Waiting ${Math.ceil(wait / 1000)}s for an OpenStreetMap slot — ` +
+          `${done} of ${tiles.length} areas loaded`,
+      );
+      await sleep(wait, options.signal);
+      waitingMs += wait;
+      consecutiveFailures = 0;
     }
 
+    let cacheHit = false;
     try {
-      responses.push(await fetchOne(tiles[index], layers, rest));
+      responses.push(
+        await fetchOne(tiles[index], layers, { ...rest, onCacheHit: () => (cacheHit = true) }),
+      );
       consecutiveFailures = 0;
       done++;
+      if (cacheHit) fromCache++;
       options.onAttempt?.(`Map data, area ${done} of ${tiles.length}`);
+      options.onTile?.({ done, total: tiles.length, fromCache, waitingMs });
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') throw err;
       consecutiveFailures++;
@@ -510,7 +695,12 @@ export async function fetchOsm(
 
     // Space the requests out. A burst is what gets an IP refused, and the
     // cache means this cost is paid once per area rather than per build.
-    if (index < tiles.length - 1) {
+    //
+    // Skipped entirely for a cache hit: nothing was sent, so there is nothing
+    // to be polite about. That is what makes pressing Generate again cheap —
+    // on a resume the already-fetched areas cost no network AND no delay,
+    // where before they each burned a second and a half doing nothing.
+    if (index < tiles.length - 1 && !cacheHit) {
       await sleep(options.tileGapMs ?? TILE_GAP_MS, options.signal);
     }
   }
@@ -520,8 +710,8 @@ export async function fetchOsm(
     throw new OverpassError(
       `All ${tiles.length} tiles failed`,
       `Could not reach OpenStreetMap for any part of this area. The terrain will still ` +
-        `generate — turn the feature layers off to skip this step, or try a smaller ` +
-        `selection, which needs far fewer requests.`,
+        `generate — turn the feature layers off to skip this step, or try again in a few ` +
+        `minutes.`,
     );
   }
 

@@ -25,6 +25,7 @@ import {
   fitCircleToRoutes,
   fitSelectionToRoutes,
   selectionArea_km2,
+  boxIntersectsRing,
   selectionBBox,
   selectionRingLonLat,
   type SelectionShape,
@@ -41,7 +42,7 @@ import type {
 } from '../geometry/types';
 import type { LineFeature } from '../data/osm/normalise';
 import { normalise } from '../data/osm/normalise';
-import { fetchOsm, OverpassError } from '../data/osm/overpass';
+import { fetchOsm, OverpassError, planOsmTiles } from '../data/osm/overpass';
 import { buildFeaturePreview, enabledLineLayers } from '../map/featurePreview';
 import { resolveScale } from '../geometry/coords';
 import { BASEMAPS } from '../map/basemaps';
@@ -154,6 +155,35 @@ function toSerialisable(routes: Route[]): SerialisableRoute[] {
  * model and then jumps to the shared one: by the time anything renders, this is
  * already the initial state. Null when the hash is absent or unreadable.
  */
+/**
+ * Where a map-data fetch stops being incidental and becomes something to warn
+ * about. Two minutes: long enough that silence reads as a hang.
+ */
+const SLOW_FETCH_S = 120;
+
+/**
+ * Where "slow" becomes "not in one pass".
+ *
+ * A 100 km ultramarathon is the case this has to serve, and it lands around
+ * 150 requests once tiles outside the outline are dropped — roughly ten
+ * minutes. 500 leaves generous headroom above that while still being reached
+ * long before the numbers get silly: a selection spanning several countries
+ * plans thousands of requests and some hours, and telling someone to "leave it
+ * running" is then a promise the app cannot keep.
+ *
+ * It is still not a refusal. Cached areas cost no request and no delay, so
+ * pressing Generate repeatedly does get there — it just is not one sitting, and
+ * saying so is more useful than a spinner that never ends.
+ */
+const HUGE_FETCH_TILES = 500;
+
+/** A rough duration, in the units someone waiting actually thinks in. */
+function fetchTimeLabel(seconds: number): string {
+  if (seconds < 90) return `${Math.max(1, Math.round(seconds))} s`;
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} min`;
+}
+
 const SHARED = typeof window === 'undefined' ? null : decodeHash(window.location.hash);
 
 function slugify(name: string): string {
@@ -495,6 +525,25 @@ export function App() {
       return null;
     }
   }, [config]);
+
+  /**
+   * What the OSM fetch is about to cost, before it starts.
+   *
+   * Recomputed with the selection because that is what drives it. Cheap: this
+   * counts grid cells, it does not touch the network.
+   */
+  const osmPlan = useMemo(() => {
+    if (!shape) return null;
+    const enabled = (Object.keys(settings.layers) as LayerId[]).filter(
+      (id) => settings.layers[id]?.enabled,
+    );
+    if (enabled.length === 0) return null;
+    const ring = shape.kind === 'rectangle' ? null : selectionRingLonLat(shape);
+    return planOsmTiles(
+      selectionBBox(shape),
+      ring ? (tile) => boxIntersectsRing(tile, ring) : undefined,
+    );
+  }, [shape, settings.layers]);
 
   const area_km2 = useMemo(
     () => (shape ? selectionArea_km2(shape, bboxCentre(selectionBBox(shape))) : 0),
@@ -1540,7 +1589,43 @@ export function App() {
                 <dd>
                   {gridPreview.cols} × {gridPreview.rows}
                 </dd>
+                {osmPlan ? (
+                  <>
+                    <dt>Map data</dt>
+                    <dd>
+                      {osmPlan.single
+                        ? '1 request'
+                        : `${osmPlan.tiles} requests · about ${fetchTimeLabel(osmPlan.seconds)}`}
+                      {osmPlan.tiles >= HUGE_FETCH_TILES ? (
+                        <span className="badge badge--huge">too many</span>
+                      ) : osmPlan.seconds >= SLOW_FETCH_S ? (
+                        <span className="badge badge--slow">slow</span>
+                      ) : null}
+                    </dd>
+                  </>
+                ) : null}
               </dl>
+              {/* The indicator, not a refusal. A 100 km route genuinely needs
+                  this many requests and OpenStreetMap will only take them at
+                  its own pace; someone told that up front waits, while someone
+                  told nothing assumes it has hung and cancels. Two tiers,
+                  because "leave it running" stops being true somewhere. */}
+              {osmPlan && osmPlan.tiles >= HUGE_FETCH_TILES ? (
+                <p className="note note--warn">
+                  This selection needs <strong>{osmPlan.tiles} requests</strong> to
+                  OpenStreetMap — several hours, and more than it will serve in one run.
+                  The terrain builds regardless. To get the map features too: untick layers
+                  you do not need, or shrink the selection. Whatever does load is cached, so
+                  pressing Generate again picks up where it stopped.
+                </p>
+              ) : osmPlan && osmPlan.seconds >= SLOW_FETCH_S ? (
+                <p className="note">
+                  A selection this size is fetched in {osmPlan.tiles} pieces, paced so
+                  OpenStreetMap keeps answering. It will finish — leave it running. Areas
+                  already fetched are cached, so a second Generate is much faster, and
+                  unticking layers you do not need cuts the work.
+                </p>
+              ) : null}
             </section>
           ) : null}
 

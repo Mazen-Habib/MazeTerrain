@@ -11,6 +11,7 @@ import type { BBox } from './types';
 import { projectENU, type EnuOrigin } from './coords';
 import { unionBBox } from '../data/gpx/parse';
 import type { Route } from '../data/gpx/types';
+import { pointInRing } from './route';
 
 /** F2 requires N >= 128 so a printed circle reads as a circle. */
 export const CIRCLE_SEGMENTS = 192;
@@ -167,4 +168,87 @@ export function selectionArea_km2(shape: SelectionShape, origin: EnuOrigin): num
     sum += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
   }
   return Math.abs(sum / 2) / 1e6;
+}
+
+/**
+ * Does an axis-aligned box overlap a selection outline at all?
+ *
+ * Used to drop OSM tiles the selection never reaches. The tile grid covers the
+ * selection's BOUNDING BOX, and a circle inscribed in its box leaves 21% of
+ * that box empty — on the ~150-tile grid a 100 km ultramarathon needs, that is
+ * over thirty requests spent fetching ground the model does not contain, at a
+ * point where the request count is the binding constraint.
+ *
+ * Exact rather than approximate, deliberately. A cheap "is the centre inside"
+ * test drops tiles that the outline clips a corner of, and a missing tile shows
+ * up as a rectangular hole in the road network — which reads as a geometry bug,
+ * not as a fetch that skipped something.
+ *
+ * Three cases, and together they are complete for a simple polygon: the box
+ * pokes into the ring (a corner is inside), the ring pokes into the box (a
+ * vertex is inside), or their edges cross. A box entirely containing the ring
+ * is caught by the second; a ring entirely containing the box, by the first.
+ */
+export function boxIntersectsRing(
+  box: { west: number; south: number; east: number; north: number },
+  ring: Array<[number, number]>,
+): boolean {
+  if (ring.length < 3) return true;
+
+  const corners: Array<[number, number]> = [
+    [box.west, box.south],
+    [box.east, box.south],
+    [box.east, box.north],
+    [box.west, box.north],
+  ];
+
+  for (const [x, y] of corners) {
+    if (pointInRing(x, y, ring)) return true;
+  }
+
+  for (const [x, y] of ring) {
+    if (x >= box.west && x <= box.east && y >= box.south && y <= box.north) return true;
+  }
+
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    for (let c = 0; c < 4; c++) {
+      if (segmentsCross(ring[j], ring[i], corners[c], corners[(c + 1) % 4])) return true;
+    }
+  }
+
+  return false;
+}
+
+/** Do two closed segments cross? Orientation test, collinear cases included. */
+function segmentsCross(
+  a: [number, number],
+  b: [number, number],
+  c: [number, number],
+  d: [number, number],
+): boolean {
+  const side = (p: [number, number], q: [number, number], r: [number, number]) => {
+    const v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    return v > 0 ? 1 : v < 0 ? -1 : 0;
+  };
+  const onSegment = (p: [number, number], q: [number, number], r: [number, number]) =>
+    Math.min(p[0], r[0]) <= q[0] &&
+    q[0] <= Math.max(p[0], r[0]) &&
+    Math.min(p[1], r[1]) <= q[1] &&
+    q[1] <= Math.max(p[1], r[1]);
+
+  const d1 = side(a, b, c);
+  const d2 = side(a, b, d);
+  const d3 = side(c, d, a);
+  const d4 = side(c, d, b);
+
+  if (d1 !== d2 && d3 !== d4) return true;
+
+  // Collinear and overlapping. Rare between a grid line and a selection edge,
+  // but a selection snapped to whole degrees puts an edge exactly on one.
+  if (d1 === 0 && onSegment(a, c, b)) return true;
+  if (d2 === 0 && onSegment(a, d, b)) return true;
+  if (d3 === 0 && onSegment(c, a, d)) return true;
+  if (d4 === 0 && onSegment(c, b, d)) return true;
+
+  return false;
 }
