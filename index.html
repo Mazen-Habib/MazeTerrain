@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Peakora</title>
+    <!--
+      Stamp the theme before first paint.
+
+      Reading it in a React effect means the light palette renders for a frame
+      first, so every load starts with a white flash. Kept deliberately tiny and
+      inline; the default here must match DEFAULT_THEME in src/config/theme.ts.
+    -->
+    <script>
+      try {
+        var t = localStorage.getItem('mazeterrain.theme');
+        document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark';
+      } catch (e) {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

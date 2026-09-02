@@ -255,7 +255,7 @@ export function SunControl({ sun, onChange, enabled, onEnabledChange }: SunContr
 
       <p className="field__hint">
         {enabled
-          ? 'Drag the sun, or use the arrow keys. Low sun across a slope throws the longest shadows; overhead flattens the relief. Lighting only — it does not change the printed model.'
+          ? 'Drag the sun or use the arrow keys. Lighting only — it does not change the printed model.'
           : 'Switch Live terrain on to shade the map with it.'}
       </p>
     </section>

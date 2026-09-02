@@ -994,6 +994,21 @@ export function App() {
           />
         ) : (
         <aside className="panel">
+          {/* Pinned above the groups, deliberately outside the accordion.
+              The sun drives the live map shading, so it is adjusted WHILE
+              looking at the map rather than while setting something up — and a
+              control you reach for constantly does not belong behind a
+              disclosure. It is also the only control here that changes nothing
+              about the printed model. */}
+          <div className="panel__top">
+            <SunControl
+              sun={sun}
+              onChange={setSun}
+              enabled={terrain3d}
+              onEnabledChange={setTerrain3d}
+            />
+          </div>
+
           <div className="panel__scroll">
             <Section
               id="place"
@@ -1630,13 +1645,6 @@ export function App() {
               open={openGroup === 'terrain'}
               onToggle={() => toggleGroup('terrain')}
             >
-            <SunControl
-              sun={sun}
-              onChange={setSun}
-              enabled={terrain3d}
-              onEnabledChange={setTerrain3d}
-            />
-
             <section>
               <NumberField
                 label="Vertical exaggeration"
@@ -1801,6 +1809,31 @@ export function App() {
               </section>
             ) : null}
           </div>
+
+          <div className="panel__foot">
+            <div className="themeswitch" role="radiogroup" aria-label="Theme">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={theme === 'light'}
+                className={theme === 'light' ? 'themeswitch__on' : ''}
+                onClick={() => setTheme('light')}
+              >
+                <SunIcon />
+                Light
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={theme === 'dark'}
+                className={theme === 'dark' ? 'themeswitch__on' : ''}
+                onClick={() => setTheme('dark')}
+              >
+                <MoonIcon />
+                Dark
+              </button>
+            </div>
+          </div>
         </aside>
         )}
 
@@ -1943,15 +1976,6 @@ export function App() {
           {dataset?.attribution ?? ''}
         </span>
         <span className="attribution__actions">
-          <button
-            type="button"
-            className="btn btn--link"
-            title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
-            aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}
-            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-          >
-            {theme === 'light' ? <MoonIcon /> : <SunIcon />}
-          </button>
           <button
             type="button"
             className="btn btn--link"

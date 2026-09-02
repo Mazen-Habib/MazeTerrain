@@ -8,7 +8,8 @@
  * which is the worst possible failure for the least important state.
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { readTheme, applyTheme } from '../src/config/theme';
+import { readFile } from 'node:fs/promises';
+import { readTheme, applyTheme, DEFAULT_THEME } from '../src/config/theme';
 import { DEFAULT_GROUP, readOpenGroup, writeOpenGroup } from '../src/app/Section';
 
 const store = new Map<string, string>();
@@ -43,14 +44,25 @@ afterEach(() => {
 
 describe('theme', () => {
   /**
-   * Light, not `prefers-color-scheme`.
+   * Dark, and not from `prefers-color-scheme`.
    *
-   * The design is light and most people never set the OS preference
-   * deliberately; opening dark for someone who was shown the light design
-   * reads as broken rather than considerate.
+   * The viewport is dark whatever the chrome does, so a bright panel beside it
+   * all day is tiring. An OS setting made months ago for unrelated reasons is
+   * a poor proxy for that decision.
    */
-  it('defaults to light', () => {
-    expect(readTheme()).toBe('light');
+  it('defaults to dark', () => {
+    expect(readTheme()).toBe(DEFAULT_THEME);
+    expect(DEFAULT_THEME).toBe('dark');
+  });
+
+  /**
+   * The boot script in index.html stamps the theme before React runs, to avoid
+   * a white flash on every load. It hardcodes the default, so if these two ever
+   * disagree the flash comes back silently.
+   */
+  it('matches the default hardcoded in the boot script', async () => {
+    const html = await readFile('index.html', 'utf8');
+    expect(html).toContain("dataset.theme = t === 'light' ? 'light' : 'dark'");
   });
 
   it('round-trips a choice', () => {
@@ -67,13 +79,13 @@ describe('theme', () => {
 
   it('ignores a stored value that is not a theme', () => {
     store.set('mazeterrain.theme', 'solarized');
-    expect(readTheme()).toBe('light');
+    expect(readTheme()).toBe(DEFAULT_THEME);
   });
 
   it('survives storage throwing', () => {
     stubDeniedStorage();
-    expect(readTheme()).toBe('light');
-    expect(() => applyTheme('dark')).not.toThrow();
+    expect(readTheme()).toBe(DEFAULT_THEME);
+    expect(() => applyTheme('light')).not.toThrow();
   });
 });
 

@@ -361,6 +361,69 @@ body {
   transition: width 160ms ease, flex-basis 160ms ease;
 }
 
+/*
+ * Pinned above the groups: the sun dial.
+ *
+ * It is adjusted while looking at the map, not while setting something up, and
+ * a control reached for that often does not belong behind a disclosure. It is
+ * also the only thing in the panel that changes nothing about the printed
+ * model, which is its own argument for keeping it out of the build workflow.
+ */
+.panel__top {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel__top .field__hint {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* The theme switch lives at the foot, where the reference design puts it. */
+.panel__foot {
+  flex: 0 0 auto;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.themeswitch {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.themeswitch button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.themeswitch button:hover:not(.themeswitch__on) {
+  color: var(--text);
+}
+
+.themeswitch__on {
+  background: var(--surface);
+  color: var(--text) !important;
+  box-shadow: var(--shadow-sm);
+}
+
 /* The scrolling part, so the sidebar footer can stay put. */
 .panel__scroll {
   flex: 1;
@@ -1719,9 +1782,8 @@ body {
 /* Sun position dial (F3.2). Sits at the very top of the sidebar, above the
    tabs, because it applies to the map whatever tab is showing. */
 .sun {
-  padding: 0 0 14px;
-  margin: 0 0 14px;
-  border-bottom: 1px solid var(--line);
+  padding: 0;
+  margin: 0;
 }
 
 .sun__head {
@@ -1759,9 +1821,15 @@ body {
   filter: saturate(0.3);
 }
 
+/*
+ * Smaller than it was, because it is now pinned above the groups rather than
+ * scrolling with them. At 190px it took a quarter of the sidebar permanently
+ * and squeezed the accordion into a strip; the dial is a direction picker and
+ * does not need to be large to be draggable.
+ */
 .sun__dial {
   width: 100%;
-  max-width: 190px;
+  max-width: 132px;
   height: auto;
   cursor: grab;
   touch-action: none;
@@ -1825,7 +1893,7 @@ body {
   display: flex;
   gap: 8px;
   margin: 10px 0 0;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-2);
@@ -1838,7 +1906,8 @@ body {
 
 .sun__readout dd {
   margin: 0;
-  font-size: 15px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text);

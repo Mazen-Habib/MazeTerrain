@@ -1,11 +1,12 @@
 /**
  * Light or dark (2026-09-02).
  *
- * Light is the default. The palette is white, black and one orange, and the
- * orange is the only saturated thing on screen — which is what makes it mean
- * something when it appears. Dark exists because this is a tool people use for
- * a long sitting, sometimes at night, and a full-bright panel next to a dark 3D
- * viewport is tiring.
+ * **Dark is the default** (owner's call, same day). Light exists and is a
+ * first-class theme — the palette was designed light-first — but the app is
+ * mostly a dark 3D viewport and a dark map, and a bright panel beside them all
+ * day is tiring. The palette is white, black and one orange, and the orange is
+ * the only saturated thing on screen — which is what makes it mean something
+ * when it appears.
  *
  * Applied by stamping `data-theme` on the document element; every colour in the
  * app is a custom property, so a theme is a set of variables rather than a
@@ -16,24 +17,33 @@
  * decision about the content, not about the chrome, so it does not follow the
  * theme — see the `--viewport` tokens.
  *
- * Deliberately NOT following `prefers-color-scheme` on first run. The reference
- * this was designed against is light, most people never change the OS setting
- * deliberately, and a tool that opens dark for someone who expected the design
- * they were shown looks broken rather than considerate. The switch is one click
- * away and remembered.
+ * Deliberately NOT following `prefers-color-scheme`. The default is a decision
+ * about this app, whose viewport is dark whatever the chrome does; an OS
+ * setting made months ago for unrelated reasons is a poor proxy for it. The
+ * switch sits at the foot of the sidebar and is remembered.
  */
 export type Theme = 'light' | 'dark';
 
-const STORAGE_KEY = 'mazeterrain.theme';
+export const STORAGE_KEY = 'mazeterrain.theme';
+
+/**
+ * Also written literally into the boot script in `index.html`.
+ *
+ * That script runs before React and before first paint, because reading the
+ * theme in an effect means the light palette renders for a frame and every
+ * load starts with a white flash. Two places holding one value is a real cost;
+ * a flash on every single page load is a worse one.
+ */
+export const DEFAULT_THEME: Theme = 'dark';
 
 export function readTheme(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === 'light' || stored === 'dark') return stored;
   } catch {
-    // Storage denied or full. Light is still a correct answer.
+    // Storage denied or full. The default is still a correct answer.
   }
-  return 'light';
+  return DEFAULT_THEME;
 }
 
 export function applyTheme(theme: Theme): void {
