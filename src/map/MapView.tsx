@@ -11,6 +11,7 @@ import type { MapMouseEvent } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Route } from '../data/gpx/types';
 import { selectionBBox, type SelectionShape } from '../geometry/selection';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { BASEMAPS, demSource } from './basemaps';
 import type { DistanceUnit } from '../config/units';
 import {
@@ -26,6 +27,30 @@ import {
   type LonLat,
 } from './draw';
 import { deleteVertex, insertVertex, moveVertex, vertexHandles } from './editPath';
+
+/**
+ * Tell MapLibre where its tile-decoding worker lives.
+ *
+ * Left alone, MapLibre resolves the worker at RUNTIME as
+ * `new URL('./maplibre-gl-worker.mjs', <url of its own module>)`. In dev that
+ * happens to resolve, because Vite serves `node_modules` verbatim. In a
+ * production build the bundled chunk sits in `/assets/` and nothing named
+ * `maplibre-gl-worker.mjs` was ever emitted there — the reference is a runtime
+ * string, so no bundler can see it.
+ *
+ * The result is a map that fetches its style, its sprites and its tiles, and
+ * then decodes none of them, because the worker script 404s into the SPA
+ * fallback and comes back as HTML. It paints the background layer and nothing
+ * else, which reads as a blank white map: exactly the failure
+ * `optimizeDeps.exclude` in `vite.config.ts` describes for dev mode, with the
+ * same cause and a different trigger.
+ *
+ * `?worker&url` is the tool for this rather than `?url`: the worker imports
+ * `./maplibre-gl-shared.mjs`, so copying the file alone leaves a relative
+ * import pointing at nothing. `?worker` bundles it with its dependencies and
+ * hands back the emitted asset URL.
+ */
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 

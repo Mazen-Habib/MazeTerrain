@@ -1,0 +1,11 @@
+# Nothing here is needed to build or serve the app, and every file listed is
+# one Vercel does not have to upload on each deploy.
+
+.claude/
+docs/
+tests/
+*.md
+!README.md
+.git/
+dist/
+node_modules/

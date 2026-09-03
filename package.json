@@ -4,6 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "description": "GPX route + map selection to a 3D-printable mesh. Phase 0: DEM to watertight STL.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

@@ -82,9 +82,27 @@ describe('layOutForPrint', () => {
     expect(secondMin).toBeGreaterThan(firstMax);
   });
 
-  it('leaves the body exactly where it was', () => {
-    const parts = [boxPart('model', -50, 50), boxPart('insert:0', -20, 20)];
-    expect(layOutForPrint(parts)[0].positions).toBe(parts[0].positions);
+  /**
+   * The body used to be pinned at the origin, and that was the bug.
+   *
+   * Leaving it centred is what forced every insert out to one side: it occupies
+   * the middle of the bed, so the only space left is a flank half the model's
+   * width, which nothing model-sized fits into. The body is now packed with
+   * everything else.
+   *
+   * What must still hold is that a piece's PARTS move together — a multicolour
+   * body whose roads drifted away from its terrain would be far worse than one
+   * that is not at the origin.
+   */
+  it('moves the parts of one piece together', () => {
+    const parts = [
+      boxPart('terrain', -50, 50),
+      boxPart('roads', -50, 50),
+      boxPart('insert:0', -20, 20),
+    ];
+    const laid = layOutForPrint(parts);
+    const shift = (i: number) => laid[i].positions[0] - parts[i].positions[0];
+    expect(shift(0)).toBe(shift(1));
   });
 
   it('does nothing at all when there is no insert', () => {
@@ -187,5 +205,87 @@ describe('dropping parts onto the bed', () => {
     const parts = [boxPart('model', -50, 50, 0, 8), boxPart('insert:0', -20, 20, 0, 4)];
     const dropped = dropSeparateToPlate(parts);
     expect(zRange(dropped[1])).toEqual([0, 4]);
+  });
+});
+
+/**
+ * Packing to a bed.
+ *
+ * Reported from a real print: a cut-out model with a route insert and a water
+ * insert laid out in one row, ran off the side of a 220 mm Creality bed, and
+ * had to be arranged by hand — which is the job this function exists to do.
+ */
+describe('fitting the bed', () => {
+  const ENDER3 = [220, 220] as const;
+
+  /** Three model-sized pieces: a body and two inserts, ~100 mm each. */
+  const threePieces = () => [
+    boxPart('model', -50, 50),
+    boxPart('insert:0', -50, 50),
+    boxPart('insert:water', -50, 50),
+  ];
+
+  const spanX = (parts: ReturnType<typeof threePieces>) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of parts) {
+      const [a, b] = xRange(p);
+      lo = Math.min(lo, a);
+      hi = Math.max(hi, b);
+    }
+    return hi - lo;
+  };
+
+  it('runs off the bed in a single row, which is why it wraps', () => {
+    // Unbounded: the old behaviour, and still correct when no bed is known.
+    const row = layOutForPrint(threePieces(), null);
+    expect(spanX(row)).toBeGreaterThan(ENDER3[0]);
+  });
+
+  it('wraps into a grid that fits the bed', () => {
+    const laid = layOutForPrint(threePieces(), ENDER3);
+    expect(spanX(laid)).toBeLessThanOrEqual(ENDER3[0]);
+  });
+
+  it('keeps every piece inside the bed, not just the overall width', () => {
+    const laid = layOutForPrint(threePieces(), ENDER3);
+    for (const p of laid) {
+      const [lo, hi] = xRange(p);
+      expect(lo).toBeGreaterThanOrEqual(-ENDER3[0] / 2);
+      expect(hi).toBeLessThanOrEqual(ENDER3[0] / 2);
+    }
+  });
+
+  it('does not overlap the pieces it wrapped', () => {
+    const laid = layOutForPrint(threePieces(), ENDER3);
+    const boxes = laid.map((p) => {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let i = 0; i < p.positions.length; i += 3) {
+        minX = Math.min(minX, p.positions[i]);
+        maxX = Math.max(maxX, p.positions[i]);
+        minY = Math.min(minY, p.positions[i + 1]);
+        maxY = Math.max(maxY, p.positions[i + 1]);
+      }
+      return { minX, maxX, minY, maxY };
+    });
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i], b = boxes[j];
+        const overlaps =
+          a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+        expect(overlaps, `piece ${i} overlaps ${j}`).toBe(false);
+      }
+    }
+  });
+
+  /**
+   * A piece wider than the whole bed cannot be helped, and must not send the
+   * packer round forever looking for a row it fits in. F8 already warns about
+   * a model too big for the plate; this only has to terminate.
+   */
+  it('places a piece wider than the bed rather than looping', () => {
+    const parts = [boxPart('model', -300, 300), boxPart('insert:0', -20, 20)];
+    const laid = layOutForPrint(parts, ENDER3);
+    expect(laid).toHaveLength(2);
   });
 });

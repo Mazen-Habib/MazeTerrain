@@ -846,7 +846,7 @@ export function App() {
       // which is right on screen and wrong in a file going to a slicer: nested
       // solids give internal perimeters along the whole route, and an insert
       // buried in a cavity cannot be printed at all.
-      writeBinarySTL(layOutForPrint(bundle.parts), stlHeader()),
+      writeBinarySTL(layOutForPrint(bundle.parts, config.bedSize_mm), stlHeader()),
       stlFilename(builtSlug.current, config.modelWidth_mm),
       'model/stl',
     );
@@ -894,7 +894,7 @@ export function App() {
     save(
       // Same reason as the STL: a 3MF's objects land on the plate where they
       // are put, so a nested insert is just as unprintable there.
-      writeThreeMF(layOutForPrint(bundle.parts)),
+      writeThreeMF(layOutForPrint(bundle.parts, config.bedSize_mm)),
       threeMFFilename(builtSlug.current, config.modelWidth_mm),
       'model/3mf',
     );

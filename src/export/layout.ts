@@ -119,22 +119,46 @@ export function dropSeparateToPlate(parts: MeshPart[]): MeshPart[] {
   });
 }
 
-/**
- * Move every separately-printed part clear of the ones that stay assembled.
- *
- * Inserts are placed in a row to the east of the body, in the order they were
- * built, each clear of the last, and each dropped so its own underside rests on
- * z = 0. The drop is not optional: an insert's flat underside sits at the
- * channel floor, millimetres above the bed, which is right in the assembled
- * model and leaves the part floating as soon as it is printed alone. A slicer
- * will not place it for you — it prints it in mid-air, or refuses.
- *
- * Returns the input array unchanged when there is nothing to move, so the
- * common case allocates nothing.
- */
-export function layOutForPrint(parts: MeshPart[]): MeshPart[] {
-  if (!parts.some(isSeparate)) return parts;
+/** Kept clear of the bed edge, so a piece is never right on the boundary. */
+const BED_MARGIN_MM = 5;
 
+/**
+ * Arrange every piece so the whole model fits the bed.
+ *
+ * Pieces used to go in a single row east of the body, which works for one small
+ * insert and fails for everything else. A 100 mm model with a route insert and
+ * a water insert is three pieces roughly 100 mm wide: in a row that is over
+ * 320 mm, so on a 220 mm Creality bed two of them hang off the side and the
+ * user has to arrange the plate by hand — which is the job this function
+ * exists to do.
+ *
+ * They are now shelf-packed into a grid: fill a row left to right, and when the
+ * next piece would cross the bed's usable width, start a new row below. Three
+ * ~100 mm pieces become a 2 x 2 arrangement that fits 220 mm with room to
+ * spare.
+ *
+ * **The body is packed with everything else** rather than staying at the
+ * origin. Leaving it centred is what forced the inserts out to the side in the
+ * first place: it occupies the middle of the bed and leaves only half the width
+ * on either flank, which nothing model-sized fits into.
+ *
+ * With no bed selected the width is unbounded and this degrades to the old
+ * single row, which is the correct answer when we do not know what it has to
+ * fit on.
+ *
+ * Every piece is also dropped so its own underside rests on z = 0. The drop is
+ * not optional: an insert's flat underside sits at the channel floor,
+ * millimetres above the bed, which is right in the assembled model and leaves
+ * the part floating as soon as it is printed alone. A slicer will not place it
+ * for you — it prints it in mid-air, or refuses.
+ *
+ * Returns the input array unchanged when nothing needs to move, so the common
+ * single-piece case allocates nothing.
+ */
+export function layOutForPrint(
+  parts: MeshPart[],
+  bed_mm?: readonly [number, number] | null,
+): MeshPart[] {
   // Group into pieces, keeping the order they were built in.
   const units = new Map<string, MeshPart[]>();
   for (const part of parts) {
@@ -143,29 +167,62 @@ export function layOutForPrint(parts: MeshPart[]): MeshPart[] {
     if (list) list.push(part);
     else units.set(unit, [part]);
   }
+  if (units.size < 2) return parts;
 
-  // The body stays put. With no body — a fully tiled model is all pieces — the
-  // first piece anchors the row instead, so the model does not walk away from
-  // the origin for no reason.
-  const anchor = units.has(BODY) ? BODY : [...units.keys()][0];
-  const anchorBounds = groupBounds(units.get(anchor) ?? []);
-  if (!anchorBounds) return parts;
+  // The body first, so the arrangement is predictable and the main model reads
+  // top-left rather than wherever the build order happened to put it.
+  const order = [...units.keys()].sort((a, b) =>
+    a === BODY ? -1 : b === BODY ? 1 : 0,
+  );
 
-  const moved = new Map<MeshPart, MeshPart>();
-  let cursor = anchorBounds.maxX + GAP_MM;
+  const sized = order
+    .map((unit) => ({ unit, members: units.get(unit) ?? [], bounds: groupBounds(units.get(unit) ?? []) }))
+    .filter((p): p is { unit: string; members: MeshPart[]; bounds: Bounds } => p.bounds !== null);
+  if (sized.length === 0) return parts;
 
-  for (const [unit, members] of units) {
-    if (unit === anchor) continue;
-    const b = groupBounds(members);
-    if (!b) continue;
-    const dx = cursor - b.minX;
-    for (const part of members) moved.set(part, translated(part, dx, 0, -b.minZ));
-    cursor += b.maxX - b.minX + GAP_MM;
+  const usableWidth = bed_mm ? Math.max(0, bed_mm[0] - BED_MARGIN_MM * 2) : Infinity;
+
+  // Shelf-pack. `placed` records the target minX/minY for each piece.
+  const placed: Array<{ members: MeshPart[]; bounds: Bounds; x: number; y: number }> = [];
+  let cursorX = 0;
+  let shelfY = 0;
+  let shelfDepth = 0;
+  let widest = 0;
+
+  for (const piece of sized) {
+    const w = piece.bounds.maxX - piece.bounds.minX;
+    const d = piece.bounds.maxY - piece.bounds.minY;
+
+    // Wrap when this piece would cross the bed edge — but never wrap a row that
+    // is still empty, or a piece wider than the whole bed would loop forever.
+    if (cursorX > 0 && cursorX + w > usableWidth) {
+      shelfY -= shelfDepth + GAP_MM;
+      cursorX = 0;
+      shelfDepth = 0;
+    }
+
+    placed.push({ members: piece.members, bounds: piece.bounds, x: cursorX, y: shelfY - d });
+    cursorX += w + GAP_MM;
+    widest = Math.max(widest, cursorX - GAP_MM);
+    shelfDepth = Math.max(shelfDepth, d);
   }
 
-  // Honour the "allocates nothing when nothing moves" contract: a model that is
-  // all one piece, or a lone insert with no body to move away from, comes back
-  // as the very array it went in as.
+  // Centre the whole arrangement on the origin, which is where the bed centre
+  // is. Packing from a corner and leaving it there would put a small model in
+  // the top-left of the plate for no reason.
+  const totalDepth = -(shelfY - shelfDepth);
+  const offsetX = -widest / 2;
+  const offsetY = totalDepth / 2;
+
+  const moved = new Map<MeshPart, MeshPart>();
+  for (const piece of placed) {
+    const dx = piece.x + offsetX - piece.bounds.minX;
+    const dy = piece.y + offsetY - piece.bounds.minY;
+    const dz = -piece.bounds.minZ;
+    if (dx === 0 && dy === 0 && dz === 0) continue;
+    for (const part of piece.members) moved.set(part, translated(part, dx, dy, dz));
+  }
+
   if (moved.size === 0) return parts;
   return parts.map((p) => moved.get(p) ?? p);
 }

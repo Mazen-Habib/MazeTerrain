@@ -195,14 +195,17 @@ describe('tiles as print units', () => {
     ];
     const laid = layOutForPrint(parts);
 
-    // A1 anchors; its two layers keep their relative position exactly.
+    // Each tile's two layers move by the SAME amount, so its roads stay on its
+    // terrain. That is the invariant — not that any one tile sits still. Tiles
+    // are packed to fit the bed, so where a given tile lands is the packer's
+    // business and asserting an absolute position would only pin the current
+    // arrangement in place.
     const shift = (i: number) => laid[i].positions[0] - parts[i].positions[0];
-    expect(shift(0)).toBe(0);
-    expect(shift(1)).toBe(0);
-
-    // B1's two layers move by the SAME amount, so roads stay on their terrain.
+    expect(shift(0)).toBe(shift(1));
     expect(shift(2)).toBe(shift(3));
-    expect(shift(2)).toBeGreaterThan(0);
+
+    // And the two tiles genuinely end up apart.
+    expect(shift(0)).not.toBe(shift(2));
   });
 
   it('drops a tile by its own lowest point, not layer by layer', () => {

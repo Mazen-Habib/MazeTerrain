@@ -68,3 +68,32 @@ docs/
   ending in `_m` is metres in *world space*. Never mix them in one variable.
 - **Dates** are ISO-8601.
 - **Every doc has a `Last updated` line.** Bump it when you edit.
+
+## Deploying
+
+Vercel, from the repo root. `vercel.json` sets the framework, the build and output
+directory, an SPA rewrite that leaves `/assets/` alone, and cache headers: content-hashed
+assets immutable for a year, `index.html` revalidated every time.
+
+```bash
+npm ci && npm run build   # what Vercel runs
+npm run preview           # serve dist/ exactly as it will be served
+```
+
+**Run the preview before deploying, not just the dev server.** Vite's dev server resolves
+things a build cannot — most recently MapLibre's tile-decoding worker, which composes its
+own URL at runtime and so was never emitted, giving a blank map in production while dev was
+fine. See `docs/08-pitfalls.md#a-runtime-string-is-invisible-to-the-bundler`.
+
+The bundle is split so a deploy does not invalidate everything in everyone's cache:
+
+| chunk | size | changes when |
+|---|---|---|
+| `index` | ~163 kB | the app changes |
+| `react` | ~143 kB | React is upgraded |
+| `three` | ~530 kB | three.js is upgraded |
+| `maplibre` | ~947 kB | MapLibre is upgraded |
+| `manifold-*.wasm` | ~541 kB | loaded on demand, only for cut-out modes |
+
+No backend, no environment variables, no accounts — the whole app runs client-side, which
+is the Q2 decision paying off at deploy time.
