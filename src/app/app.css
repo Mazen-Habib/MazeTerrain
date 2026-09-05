@@ -20,13 +20,40 @@
 @import '@fontsource-variable/geist-mono';
 
 :root {
-  /* --- light ------------------------------------------------------------ */
-  --bg: #fbfaf9;
+  /*
+   * --- light ------------------------------------------------------------
+   *
+   * The greys were re-measured on 2026-09-06 because the light theme dissolved:
+   * borders were invisible and panels did not separate from the page. The
+   * numbers said the same thing the eye did — the old --line was 1.27:1 on a
+   * white panel and 1.08:1 on the sunken area, which is a border you cannot
+   * see. Every value below is chosen against CIE L*, not the WCAG ratio: near
+   * white the ratio flatters a difference that is not actually there.
+   *
+   * The ground is deliberately NOT darkened much. Dropping it far enough to
+   * make chips visible pushed --warn, --ok, --bad and --accent-strong under
+   * 4.5:1, because those were tuned against white. Moving the borders is the
+   * cheap fix; moving the ground is not.
+   */
+  /* dL* 3.4 under a white panel, so the panel reads as a panel. */
+  --bg: #f7f5f2;
   --surface: #ffffff;
-  --surface-2: #f4f3f1;
-  --surface-sunken: #efedea;
-  --line: #e7e4e0;
-  --line-strong: #d5d0ca;
+  --surface-2: #f1efeb;
+  --surface-sunken: #eae7e2;
+  /* 1.47:1 / dL* 14.9 on a white panel — was 1.27 / 9.3, and invisible. */
+  --line: #d9d4cd;
+  --line-strong: #bdb6ac;
+
+  /*
+   * A small filled shape sitting directly ON --bg: the phase chip, the map/3D
+   * segmented track, the theme switch.
+   *
+   * It needs its own token because the direction of "not the bar" flips with
+   * the theme. Dark lifts a chip toward the light (--surface-2); light sinks it
+   * (--surface-sunken). Using one ramp token for both left the light chips at
+   * dL* 2 against the bar — a fill you cannot see.
+   */
+  --chip: #eae7e2;
 
   --text: #16140f;
   --text-2: #4b463f;
@@ -35,14 +62,16 @@
      4.10 — under the 4.5:1 body-text minimum on two of the three. */
   --muted: #6d675e;
   /*
-   * NON-TEXT ONLY: chevrons, dividers, decorative glyphs.
+   * NON-TEXT ONLY: chevrons, dividers, the small icon buttons on a route row.
    *
-   * It is 2.4:1 on white, which is fine for a UI shape (those need 3:1 at
-   * 1.5px+ stroke) and nowhere near enough for words. Three tiers of grey where
-   * two must clear 4.5:1 leaves no room, so the third tier stopped being a text
-   * colour rather than being darkened until it duplicated --muted.
+   * 3.65:1 on a panel, 3.18:1 on the tinted row those icon buttons sit in. The
+   * previous #a8a29a was 2.53:1 and failed the 3:1 that non-text UI needs —
+   * the comment here claimed 2.4:1 was "fine for a UI shape" in the same breath
+   * as stating the rule it broke. Still nowhere near enough for words; three
+   * tiers of grey where two must clear 4.5:1 leaves no room, so this tier is
+   * not a text colour at all.
    */
-  --faint: #a8a29a;
+  --faint: #8b857d;
 
   /*
    * Two oranges, because one cannot do both jobs.
@@ -63,11 +92,19 @@
   --accent-line: #fbd3ba;
   --on-accent: #ffffff;
 
-  --ok: #1a7f4b;
+  /*
+   * Each of these is read as WORDS on its own soft ground, so 4.5:1 is the bar
+   * and all three used to sit under or on it: warn was 4.04:1, ok 4.47:1, bad
+   * 4.73:1. A warning nobody can read is worse than no warning. Now 5.49, 5.46
+   * and 5.21, and 6.0+ on a plain panel. Dark had no such problem — its
+   * equivalents were already 8.1 and 7.4 — which is why this only showed up
+   * once the light theme was actually used.
+   */
+  --ok: #15703f;
   --ok-soft: #e7f5ed;
-  --bad: #c2372f;
+  --bad: #b83229;
   --bad-soft: #fdecea;
-  --warn: #a86a09;
+  --warn: #8a5808;
   --warn-soft: #fdf3e2;
 
   /* The 3D and map canvas, in both themes. */
@@ -111,6 +148,10 @@
   --surface-sunken: #0f1114;
   --line: #24272d;
   --line-strong: #333840;
+
+  /* Lifted, not sunk — see the light theme's --chip. dL* 7.3 against the bar,
+     which is what the light theme now matches rather than the other way round. */
+  --chip: #1a1d22;
 
   --text: #edeef0;
   --text-2: #c3c7cd;
@@ -258,7 +299,7 @@ body {
 .topbar__phase {
   padding: 2px 7px;
   border-radius: var(--r-pill);
-  background: var(--surface-2);
+  background: var(--chip);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.02em;
@@ -488,7 +529,7 @@ body {
   height: 19px;
   flex: 0 0 34px;
   border-radius: 6px;
-  background: var(--surface-sunken);
+  background: var(--chip);
   border: 1px solid var(--line);
   transition: background 140ms ease, border-color 140ms ease;
 }
@@ -1415,7 +1456,7 @@ body {
   gap: 2px;
   padding: 3px;
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--chip);
 }
 
 .viewtoggle button {
@@ -1593,12 +1634,34 @@ body {
 }
 
 /* MapLibre's own chrome, toned down to match the panel. */
+
+/*
+ * Attribution is a legal requirement (docs/04-data-sources.md), so it has to be
+ * readable in both themes — and it was not. MapLibre paints its own
+ * half-transparent white pill and then inherits OUR text colour onto it, which
+ * in the dark theme is near-white on a mid grey: 3.18:1, measured. Both sides
+ * of the pair are pinned here so it stops depending on the theme at all.
+ */
 .maplibregl-ctrl-attrib {
   font-size: 10px;
+  background: rgba(255, 255, 255, 0.82) !important;
+  color: #16140f;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: #2f2a24;
 }
 
 .maplibregl-ctrl-group {
   border: 1px solid var(--line) !important;
+}
+
+/* The hairlines between stacked zoom/compass buttons are MapLibre's own #ddd —
+   1.36:1, the same invisible-on-white the theme's own borders had. Not a theme
+   token: those buttons stay white in both themes, so the divider is chosen
+   against white once rather than following the chrome. */
+.maplibregl-ctrl-group button + button {
+  border-top-color: #c4bfb8 !important;
 }
 
 .viewer canvas {
