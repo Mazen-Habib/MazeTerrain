@@ -1,3 +1,4 @@
+import { DEFAULT_KEYCHAIN } from '../src/config/keychains';
 import { resolveScale } from '../src/geometry/coords';
 import { extremes, type Heightfield } from '../src/geometry/heightfield';
 import { defaultLayers } from '../src/config/presets';
@@ -38,6 +39,8 @@ export function testConfig(overrides: Partial<GenerateConfig> = {}): GenerateCon
     seaLevelOffset_m: 0,
     resolution_m: 'auto',
     smoothing: 0,
+    includeRoutes: true,
+    keychain: DEFAULT_KEYCHAIN,
     layerHeight_mm: 0.2,
     nozzleDiameter_mm: 0.4,
     bedSize_mm: [256, 256],

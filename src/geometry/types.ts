@@ -253,6 +253,41 @@ export interface LabelSettings {
   strokeWidth_mm: number | 'auto';
 }
 
+/**
+ * Keychain mode (docs/02-feature-spec.md F13).
+ *
+ * Not a separate pipeline — see `src/geometry/keychain.ts`. The outline is an
+ * ordinary circle or round-cornered-square selection, the size is an ordinary
+ * `modelWidth_mm`, and what this block adds is the two things a keychain needs
+ * that a display model does not: filleted edges and a hole for the ring.
+ */
+export interface KeychainSettings {
+  enabled: boolean;
+  shape: 'circle' | 'square';
+  /**
+   * Corner rounding of the square outline, as a fraction of the model's width.
+   *
+   * A fraction rather than millimetres so the shape survives a size change —
+   * 5 mm of corner on a 60 mm tag and on a 25 mm tag are different objects.
+   * Ignored by the circle, which has no corners.
+   */
+  cornerRadius_frac: number;
+  /** Fillet radius on the base perimeter and the top rim, print mm. */
+  edgeRadius_mm: number;
+  hole: {
+    enabled: boolean;
+    diameter_mm: number;
+    /**
+     * Material left between the hole and the outside edge, print mm.
+     *
+     * This is a wall, and it is the part that fails: a keychain tears at the
+     * hole or nowhere. Defended ahead of the hole's own diameter — if both
+     * cannot be had, the hole shrinks and the build says so.
+     */
+    margin_mm: number;
+  };
+}
+
 export interface GenerateConfig {
   bbox: BBox;
   dataset: string;
@@ -295,6 +330,17 @@ export interface GenerateConfig {
   tiling: TilingSettings;
   /** docs/02-feature-spec.md F5.1. */
   label: LabelSettings;
+  /** docs/02-feature-spec.md F13. */
+  keychain: KeychainSettings;
+  /**
+   * Build the routes into the model at all.
+   *
+   * Separate from each route's own `visible`, which is a map-overlay decision.
+   * This is "I want the terrain and not the line on it" — asked for directly,
+   * and the alternative was making people untick every route one at a time and
+   * lose their styling to do it.
+   */
+  includeRoutes: boolean;
   /**
    * The printer's horizontal resolution limit. Not decoration either: it is the
    * floor on the terrain sampling step, because sampling finer than the nozzle

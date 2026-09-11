@@ -9,6 +9,7 @@ import type { BBox, GenerateConfig } from '../geometry/types';
 import { DEFAULT_DATASET } from '../data/dem/datasets';
 import { LAYERS } from '../data/osm/tags';
 import type { LayerSettings } from '../geometry/features';
+import { DEFAULT_KEYCHAIN } from './keychains';
 
 export interface Preset {
   id: string;
@@ -107,6 +108,8 @@ export function defaultConfig(bbox: BBox): GenerateConfig {
     profile: { enabled: false, depth_mm: 14, height_mm: 1.2 },
     tiling: { enabled: false },
     label: { text: '', capHeight_mm: 4, depth_mm: 0.6, strokeWidth_mm: 'auto' },
+    includeRoutes: true,
+    keychain: DEFAULT_KEYCHAIN,
     cutout: {
       subMode: 'groove',
       // 0.15 mm per side is the standard FDM press-fit starting point.

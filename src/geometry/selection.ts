@@ -12,6 +12,7 @@ import { projectENU, type EnuOrigin } from './coords';
 import { unionBBox } from '../data/gpx/parse';
 import type { Route } from '../data/gpx/types';
 import { pointInRing } from './route';
+import { roundedSquareRing } from './keychain';
 
 /** F2 requires N >= 128 so a printed circle reads as a circle. */
 export const CIRCLE_SEGMENTS = 192;
@@ -49,6 +50,33 @@ export function selectionRingLonLat(shape: SelectionShape): Array<[number, numbe
     case 'polygon':
       return shape.ring;
   }
+}
+
+/**
+ * The selection a keychain wants (docs/02-feature-spec.md F13).
+ *
+ * The round-cornered square comes back as an ordinary POLYGON selection, which
+ * is the whole reason keychain corners need no 3D work later: the terrain
+ * clipper, the feature clipper and the wall builder already take an arbitrary
+ * ring, so the model is born with its corners round. A square is a square
+ * on the ground — `radius_m` is the half-width — so it prints square rather
+ * than as a latitude-stretched rectangle.
+ */
+export function keychainSelection(
+  lon: number,
+  lat: number,
+  radius_m: number,
+  shape: 'circle' | 'square',
+  cornerRadius_frac: number,
+): SelectionShape {
+  if (shape === 'circle') return { kind: 'circle', lon, lat, radius_m };
+
+  const dLatPerM = 1 / EARTH_RADIUS_M / DEG;
+  const dLonPerM = dLatPerM / Math.cos(lat * DEG);
+  const ring = roundedSquareRing(radius_m * 2, radius_m * 2 * cornerRadius_frac).map(
+    ([x_m, y_m]) => [lon + x_m * dLonPerM, lat + y_m * dLatPerM] as [number, number],
+  );
+  return { kind: 'polygon', ring };
 }
 
 /** Axis-aligned bounds of a selection — what the DEM fetcher needs. */

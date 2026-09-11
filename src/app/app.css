@@ -16,7 +16,21 @@
    feeling like a document.
    ========================================================================== */
 
-@import '@fontsource-variable/geist';
+/*
+ * Two faces, one job each (owner's call, 2026-09-11).
+ *
+ * Poppins for headings, Helvetica for everything else. Only Poppins is loaded:
+ * Helvetica is licensed and ships with macOS, so it cannot be bundled and is
+ * asked for by name instead — Arial is what actually renders on Windows and
+ * Linux, which is the same metrics and a close enough face that the layout does
+ * not move between machines.
+ *
+ * Poppins is pulled at 500 and 600 only, and from the LATIN subset only. The
+ * full package carries Devanagari, which is several hundred kilobytes this app
+ * never draws — every heading in it is an English UI string.
+ */
+@import '@fontsource/poppins/latin-500.css';
+@import '@fontsource/poppins/latin-600.css';
 @import '@fontsource-variable/geist-mono';
 
 :root {
@@ -124,9 +138,26 @@
   --r-xl: 18px;
   --r-pill: 999px;
 
-  --font-sans: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /*
+   * Headings only: the wordmark, the group titles, the small caps section
+   * headers. Poppins is geometric and runs wider than the body face, which is
+   * what lets an 11px uppercase header read as a header instead of as more
+   * body text — it is doing the work that a size jump would otherwise have to.
+   */
+  --font-display: 'Poppins', 'Segoe UI', system-ui, sans-serif;
+  /*
+   * Everything else: body copy, hints, notes, labels, controls.
+   *
+   * Not bundled, on purpose — Helvetica is licensed and cannot be. On a Mac
+   * this is Helvetica; everywhere else Arial renders, which shares its metrics
+   * closely enough that nothing reflows between machines.
+   */
+  --font-sans: 'Helvetica Neue', Helvetica, Arial, system-ui, sans-serif;
   /* Numbers that are read as measurements: dimensions, counts, coordinates.
-     Tabular figures stop a live readout jittering as digits change. */
+     Tabular figures stop a live readout jittering as digits change. Left on
+     Geist Mono: neither of the two faces above has a monospace cut, and a
+     readout that does not hold its columns is the thing this token exists to
+     prevent. */
   --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 
   --panel-w: 340px;
@@ -246,6 +277,7 @@ body {
 }
 
 .topbar h1 {
+  font-family: var(--font-display);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -294,16 +326,6 @@ body {
   .topbar__social:hover {
     transform: none;
   }
-}
-
-.topbar__phase {
-  padding: 2px 7px;
-  border-radius: var(--r-pill);
-  background: var(--chip);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: var(--muted);
 }
 
 .topbar__actions {
@@ -366,6 +388,7 @@ body {
 }
 
 .exportmenu__name {
+  font-family: var(--font-display);
   font-size: 13px;
   font-weight: 550;
 }
@@ -594,6 +617,7 @@ body {
 }
 
 .panel h2 {
+  font-family: var(--font-display);
   margin: 0 0 12px;
   font-size: 11px;
   font-weight: 600;
@@ -709,6 +733,7 @@ body {
 }
 
 .group__title {
+  font-family: var(--font-display);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -846,6 +871,23 @@ body {
   font-size: 11px;
 }
 
+/*
+ * The byline, at the foot of the pinned block.
+ *
+ * Sits outside the sections on purpose, so it does not come and go with the
+ * grid preview — a credit that appears only once an area is selected is not a
+ * credit. Quiet by design: --muted at 10px is the same weight as the row labels
+ * above it, which is as much attention as a byline should take from the numbers
+ * someone is about to press Generate on.
+ */
+.panel__madeby {
+  margin: 0;
+  padding: 10px 14px 12px;
+  font-size: 10px;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
 /* --- form controls -------------------------------------------------------- */
 
 .select {
@@ -958,6 +1000,52 @@ body {
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--muted);
+}
+
+/*
+ * Two or three mutually exclusive choices, inline.
+ *
+ * A select for two options hides one of them behind a click, and two radios
+ * cost two rows for one decision. Same shape as the map/3D switch in the top
+ * bar, so the pattern means the same thing in both places.
+ */
+.segmented {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.segmented__btn {
+  flex: 1;
+  min-height: 26px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.segmented__btn:hover:not(:disabled):not(.segmented__btn--on) {
+  color: var(--text);
+}
+
+.segmented__btn--on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.segmented__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .checkbox {
@@ -1201,6 +1289,7 @@ body {
 }
 
 .empty h2 {
+  font-family: var(--font-display);
   color: var(--text);
   font-size: 18px;
   font-weight: 600;
@@ -1523,6 +1612,7 @@ body {
 }
 
 .shapetools__title {
+  font-family: var(--font-display);
   padding: 2px 8px 6px;
   font-size: 10px;
   font-weight: 600;
@@ -2016,6 +2106,7 @@ body {
 }
 
 .sun__title {
+  font-family: var(--font-display);
   margin: 0;
   font-size: 11px;
   font-weight: 600;
@@ -2084,8 +2175,23 @@ body {
   stroke-dasharray: none;
 }
 
+/*
+ * The compass letters are the one part of the dial that is NOT on the dial.
+ *
+ * The sky gradient fills a circle of radius R; the letters are drawn at R+5 to
+ * R+14, out in the SVG's margin, which means their background is the panel and
+ * not the sky. They were using --sun-ink like everything else in the dial, and
+ * --sun-ink is white in both themes because the sky is dark in both themes.
+ * White at 62% on a white panel is nothing, so in the light theme E, S and W
+ * simply were not there. N survived only because it is painted with the accent
+ * — which is exactly why the report named three letters and not four.
+ *
+ * They sit on a panel, so they take panel colours. --accent-strong rather than
+ * --accent for N: it is 12px semibold text, so 4.5:1 applies and plain --accent
+ * is 3.56:1 on white.
+ */
 .sun__cardinal {
-  fill: color-mix(in srgb, var(--sun-ink) 62%, transparent);
+  fill: var(--muted);
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 600;
@@ -2093,7 +2199,7 @@ body {
 }
 
 .sun__cardinal--n {
-  fill: var(--accent);
+  fill: var(--accent-strong);
 }
 
 .sun__centre {
@@ -2135,6 +2241,7 @@ body {
 }
 
 .sun__readout dt {
+  font-family: var(--font-display);
   margin-top: 2px;
   font-size: 9.5px;
   letter-spacing: 0.08em;

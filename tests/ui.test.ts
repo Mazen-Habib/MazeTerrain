@@ -10,7 +10,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { readTheme, applyTheme, DEFAULT_THEME } from '../src/config/theme';
-import { DEFAULT_GROUP, readOpenGroup, writeOpenGroup } from '../src/app/Section';
+import { DEFAULT_GROUPS, readOpenGroups, writeOpenGroups } from '../src/app/Section';
 
 const store = new Map<string, string>();
 
@@ -89,30 +89,56 @@ describe('theme', () => {
   });
 });
 
-describe('the open sidebar group', () => {
+describe('the open sidebar groups', () => {
   it('starts at the first step of the workflow', () => {
-    expect(readOpenGroup()).toBe(DEFAULT_GROUP);
+    expect(readOpenGroups()).toEqual([...DEFAULT_GROUPS]);
   });
 
   it('round-trips a group', () => {
-    writeOpenGroup('terrain');
-    expect(readOpenGroup()).toBe('terrain');
+    writeOpenGroups(['terrain']);
+    expect(readOpenGroups()).toEqual(['terrain']);
+  });
+
+  /** Groups open independently now, so more than one at a time is the point. */
+  it('round-trips several groups', () => {
+    writeOpenGroups(['place', 'model', 'export']);
+    expect(readOpenGroups()).toEqual(['place', 'model', 'export']);
   });
 
   /** Everything closed is a real state, and distinct from "never chosen". */
   it('remembers that everything is closed', () => {
-    writeOpenGroup(null);
-    expect(readOpenGroup()).toBeNull();
+    writeOpenGroups([]);
+    expect(readOpenGroups()).toEqual([]);
   });
 
-  it('ignores a group name that no longer exists', () => {
+  /**
+   * The storage key predates groups opening independently, so anyone who has
+   * used the app has a bare group name sitting in it. That has to keep working,
+   * or the change quietly resets the panel for every existing user.
+   */
+  it('reads a single id written by the old one-open-at-a-time version', () => {
+    store.set('mazeterrain.openGroup', 'terrain');
+    expect(readOpenGroups()).toEqual(['terrain']);
+  });
+
+  it('ignores group names that no longer exist', () => {
     store.set('mazeterrain.openGroup', 'filaments');
-    expect(readOpenGroup()).toBe(DEFAULT_GROUP);
+    expect(readOpenGroups()).toEqual([...DEFAULT_GROUPS]);
+  });
+
+  it('keeps the real groups out of a partly corrupt list', () => {
+    store.set('mazeterrain.openGroup', 'filaments,model,,terrain');
+    expect(readOpenGroups()).toEqual(['model', 'terrain']);
+  });
+
+  it('does not open the same group twice', () => {
+    store.set('mazeterrain.openGroup', 'model,model');
+    expect(readOpenGroups()).toEqual(['model']);
   });
 
   it('survives storage throwing', () => {
     stubDeniedStorage();
-    expect(readOpenGroup()).toBe(DEFAULT_GROUP);
-    expect(() => writeOpenGroup('model')).not.toThrow();
+    expect(readOpenGroups()).toEqual([...DEFAULT_GROUPS]);
+    expect(() => writeOpenGroups(['model'])).not.toThrow();
   });
 });

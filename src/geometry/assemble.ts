@@ -16,7 +16,8 @@ import { buildTerrainMesh } from './terrain';
 import { buildClippedTerrainMesh } from './terrainClip';
 import { findFloatingVertices, repairAndValidate, validateMesh } from './validate';
 import { measureParts } from '../export/estimate';
-import { BooleanError, subtractParts, unionParts } from './boolean';
+import { BooleanError, intersectPart, subtractParts, unionParts } from './boolean';
+import { buildEnvelope, buildHoleTool, placeHole } from './keychain';
 import { buildRouteSolid } from './route';
 import {
   suggestInterval,
@@ -1010,7 +1011,9 @@ export async function assemble(
   }
   const toolTop_mm = Number.isFinite(bodyTop_mm) ? bodyTop_mm + CUT_TOOL_HEADROOM_MM : undefined;
 
-  const visibleRoutes = routes.filter((r) => r.style.visible);
+  // `includeRoutes` is the model-wide switch; `visible` is per route and is
+  // also a map-overlay setting. Terrain-only is a first-class thing to want.
+  const visibleRoutes = config.includeRoutes ? routes.filter((r) => r.style.visible) : [];
   const routeParts: MeshPart[] = [];
   /**
    * The same routes built as cutting tools, for `single-cutout`.
@@ -1578,6 +1581,156 @@ export async function assemble(
         ...profileParts,
         ...routeParts,
       ];
+    }
+  }
+
+  // --- Stage 10.5: keychain (F13) -------------------------------------------
+  //
+  // After the colour-mode merge and before the bed split, for the same reason
+  // the split is last: these are edits to the FINISHED model. Filleting a part
+  // that is about to be unioned with another part would put a rounded edge in
+  // the middle of the result.
+  if (config.keychain.enabled) {
+    report({ stage: 'validating', percent: 96, detail: 'Rounding the edges and drilling the hole' });
+    try {
+      const boundary_mm = featureClip.map(
+        ([x_m, y_m]) => [x_m * scale.scale, y_m * scale.scale] as [number, number],
+      );
+      const rimZ_mm = featureClip.map(
+        ([x_m, y_m]) =>
+          worldToPrint(x_m, y_m, sampleHeightfieldAt(heightfield, x_m, y_m), scale)[2],
+      );
+
+      // The cap has to clear the tallest thing in the model, not the tallest
+      // point of the RIM — a peak in the middle is routinely higher than any
+      // point on the boundary, and a cap below it would slice the summit off.
+      let modelTop_mm = 0;
+      for (const part of parts) {
+        for (let i = 2; i < part.positions.length; i += 3) {
+          if (part.positions[i]! > modelTop_mm) modelTop_mm = part.positions[i]!;
+        }
+      }
+
+      const tools: Array<{ label: string; part: MeshPart }> = [];
+      if (config.keychain.edgeRadius_mm > 0) {
+        tools.push({
+          label: 'envelope',
+          part: buildEnvelope({
+            boundary_mm,
+            rimZ_mm,
+            edgeRadius_mm: config.keychain.edgeRadius_mm,
+            capZ_mm: modelTop_mm + config.keychain.edgeRadius_mm + 1,
+          }),
+        });
+      }
+
+      if (tools.length > 0) {
+        const envelope = tools[0]!.part;
+        const rounded: MeshPart[] = [];
+        for (const part of parts) {
+          const clipped = await intersectPart(part, envelope, {
+            name: part.name,
+            color: part.color,
+          });
+          // A part entirely outside the envelope is legitimately gone — but the
+          // BODY vanishing means the fillet ate the model, which is a fault.
+          if (clipped) rounded.push({ ...part, ...clipped });
+        }
+        if (rounded.length === 0) {
+          throw new BooleanError(
+            'Rounding removed the whole model',
+            'The edge rounding is larger than the model is thick. Reduce it, or ' +
+              'increase the base thickness.',
+          );
+        }
+        parts = rounded;
+      }
+
+      if (config.keychain.hole.enabled) {
+        const hole = placeHole(
+          config.keychain.shape,
+          config.modelWidth_mm,
+          config.keychain.hole.diameter_mm,
+          config.keychain.hole.margin_mm,
+          config.keychain.cornerRadius_frac * config.modelWidth_mm,
+        );
+        if (hole.adjusted) {
+          warnings.push({
+            level: 'warn',
+            code: 'keychain-hole-shrunk',
+            message:
+              `The ring hole was reduced to ${(hole.radius * 2).toFixed(1)} mm to keep ` +
+              `${config.keychain.hole.margin_mm.toFixed(1)} mm of material outside it. A ` +
+              `thinner wall than that is where a keychain tears. Make the keychain larger, ` +
+              `or reduce the hole margin, to get the hole you asked for.`,
+          });
+        }
+
+        const drill = buildHoleTool(
+          hole.centre,
+          hole.radius,
+          -1,
+          modelTop_mm + config.keychain.edgeRadius_mm + 2,
+        );
+        const drilled: MeshPart[] = [];
+        for (const part of parts) {
+          // Only pay for a boolean where the hole can actually reach.
+          const reach = hole.radius + 0.001;
+          let near = false;
+          for (let i = 0; i < part.positions.length; i += 3) {
+            const dx = part.positions[i]! - hole.centre[0];
+            const dy = part.positions[i + 1]! - hole.centre[1];
+            if (dx * dx + dy * dy <= reach * reach * 4) {
+              near = true;
+              break;
+            }
+          }
+          drilled.push(
+            near
+              ? { ...part, ...(await subtractParts(part, [drill], { name: part.name, color: part.color })) }
+              : part,
+          );
+        }
+        parts = drilled;
+
+        if (hole.radius * 2 < 2.5) {
+          warnings.push({
+            level: 'warn',
+            code: 'keychain-hole-small',
+            message:
+              `The ring hole is ${(hole.radius * 2).toFixed(1)} mm across. Most split ` +
+              `rings need 3 mm or more to pass through.`,
+          });
+        }
+      }
+      throwIfAborted();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      // Same principle as the colour-mode fallback: a model with square edges
+      // is worth having, and is far better than no model and a stack trace.
+      warnings.push({
+        level: 'warn',
+        code: 'keychain-failed',
+        message:
+          err instanceof BooleanError
+            ? `${err.userMessage} The keychain was left with square edges and no hole.`
+            : `Could not finish the keychain: ` +
+              `${err instanceof Error ? err.message : String(err)}. ` +
+              `It was left with square edges and no hole.`,
+      });
+    }
+
+    // The profile strip sticks out past the selection outline, which is exactly
+    // the ring the envelope trims back to — so the two features cannot both be
+    // had, and silently eating the strip would be the worst of the three.
+    if (config.profile.enabled) {
+      warnings.push({
+        level: 'warn',
+        code: 'keychain-profile-clash',
+        message:
+          'The elevation profile strip extends past the model outline, which is where ' +
+          'the keychain rounds its edge — so the strip is cut off. Turn one of them off.',
+      });
     }
   }
 

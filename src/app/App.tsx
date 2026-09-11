@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEM_DATASETS } from '../data/dem/datasets';
 import { BED_PRESETS, defaultConfig, PRESETS } from '../config/presets';
+import { KEYCHAIN_MODEL_DEFAULTS, KEYCHAIN_PRESETS } from '../config/keychains';
 import { GpxParseError, parseRouteFile, routeDistance } from '../data/gpx/parse';
 import { defaultRouteStyle, ROUTE_PALETTE, type Route } from '../data/gpx/types';
 import { stlFilename, stlHeader, writeBinarySTL } from '../export/stl';
@@ -24,6 +25,7 @@ import { bboxCentre, resolveGrid } from '../geometry/coords';
 import {
   fitCircleToRoutes,
   fitSelectionToRoutes,
+  keychainSelection,
   selectionArea_km2,
   boxIntersectsRing,
   selectionBBox,
@@ -52,7 +54,16 @@ import { Viewer, type ShadingMode } from '../preview/Viewer';
 import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
-import { ICONS, Rail, Section, readOpenGroup, writeOpenGroup, type GroupId } from './Section';
+import { KeychainPanel } from './KeychainPanel';
+import {
+  GROUP_ORDER,
+  ICONS,
+  Rail,
+  Section,
+  readOpenGroups,
+  writeOpenGroups,
+  type GroupId,
+} from './Section';
 import { SunControl, DEFAULT_SUN, type SunPosition } from './SunControl';
 import { SUPPORT_LABEL, SUPPORT_URL } from '../config/support';
 import { applyTheme, readTheme, type Theme } from '../config/theme';
@@ -235,13 +246,15 @@ export function App() {
   const [unit, setUnit] = useState<DistanceUnit>(() => readUnit());
 
   /**
-   * Which sidebar group is open. One at a time (see `Section`).
+   * Which sidebar groups are open. Any number of them (see `Section`).
    *
    * Read once on mount, like the units preference, and persisted so the panel
    * comes back where it was left rather than resetting to step one on every
    * reload.
    */
-  const [openGroup, setOpenGroup] = useState<GroupId | null>(() => readOpenGroup());
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<GroupId>>(
+    () => new Set(readOpenGroups()),
+  );
 
   /**
    * Sidebar collapsed to an icon rail.
@@ -275,10 +288,19 @@ export function App() {
     applyTheme(theme);
   }, [theme]);
 
+  /**
+   * Open or close one group, leaving every other group alone.
+   *
+   * The "leaving every other group alone" is the whole point: closing a
+   * neighbour is what used to move the header out from under the cursor.
+   * Written in the group order rather than click order so the stored value is
+   * stable and does not churn as the user works.
+   */
   const toggleGroup = useCallback((id: GroupId) => {
-    setOpenGroup((current) => {
-      const next = current === id ? null : id;
-      writeOpenGroup(next);
+    setOpenGroups((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      writeOpenGroups(GROUP_ORDER.filter((g) => next.has(g)));
       return next;
     });
   }, []);
@@ -416,6 +438,59 @@ export function App() {
       if (next) applyShape({ kind: 'rectangle', bbox: next.bbox }, next.label, true);
     },
     [applyShape],
+  );
+
+  /**
+   * Switch keychain mode on, and make the model a keychain while doing it.
+   *
+   * A mode that only rounded the corners would leave a 100 mm, 30 mm-tall slab
+   * with a 3.5 mm hole in it — not a keychain, and not what anybody pressing
+   * this means. Only the four size settings move, the panel names them, and
+   * nothing stops the user changing them back.
+   *
+   * Switching OFF deliberately restores nothing. By then those numbers may be
+   * the user's own, and silently discarding their edits is worse than leaving
+   * the model where they put it.
+   */
+  const onKeychainMode = useCallback((on: boolean) => {
+    setSettings((c) => ({
+      ...c,
+      keychain: { ...c.keychain, enabled: on },
+      ...(on
+        ? {
+            ...KEYCHAIN_MODEL_DEFAULTS,
+            /*
+             * And the map layers off.
+             *
+             * Not tidiness — 40 mm of tag cannot carry a road network, and the
+             * app already knows it: building one fires the F8 legibility
+             * warning that the roads had to be drawn wider than true scale to
+             * print at all. What comes out is a mountain with grey scribble
+             * over it. Anyone who wants the streets can tick them back on.
+             */
+            layers: Object.fromEntries(
+              Object.entries(c.layers).map(([id, layer]) => [id, { ...layer, enabled: false }]),
+            ),
+          }
+        : {}),
+    }));
+    setDirty(true);
+  }, []);
+
+  /** A peak from the list: sets the area and the outline in one action. */
+  const keychainShape = settings.keychain.shape;
+  const keychainCorner = settings.keychain.cornerRadius_frac;
+  const onKeychainPeak = useCallback(
+    (id: string) => {
+      const peak = KEYCHAIN_PRESETS.find((p) => p.id === id);
+      if (!peak) return;
+      applyShape(
+        keychainSelection(peak.lon, peak.lat, peak.radius_m, keychainShape, keychainCorner),
+        peak.label,
+        true,
+      );
+    },
+    [applyShape, keychainShape, keychainCorner],
   );
 
   /** The primary first-run path: upload a GPX and the selection is already right. */
@@ -935,7 +1010,7 @@ export function App() {
           >
             <PanelIcon />
           </button>
-          Peakora <span className="topbar__phase">Phase 2</span>
+          Peakora
           {SUPPORT_URL ? (
             <a
               className="topbar__social"
@@ -1016,7 +1091,7 @@ export function App() {
       <div className="body">
         {railed ? (
           <Rail
-            openGroup={openGroup}
+            openGroups={openGroups}
             onPick={(id) => {
               setRailed(false);
               try {
@@ -1024,8 +1099,11 @@ export function App() {
               } catch {
                 // Session-only is fine.
               }
-              setOpenGroup(id);
-              writeOpenGroup(id);
+              setOpenGroups((current) => {
+                const next = new Set(current).add(id);
+                writeOpenGroups(GROUP_ORDER.filter((g) => next.has(g)));
+                return next;
+              });
             }}
           />
         ) : (
@@ -1053,7 +1131,7 @@ export function App() {
               hint={areaLabel}
               badge={formatArea(area_km2, unit)}
               icon={ICONS.place}
-              open={openGroup === 'place'}
+              open={openGroups.has('place')}
               onToggle={() => toggleGroup('place')}
             >
             <section>
@@ -1130,7 +1208,7 @@ export function App() {
               hint={routes.length === 0 ? 'No route yet' : routes[0].name}
               badge={routes.length || undefined}
               icon={ICONS.route}
-              open={openGroup === 'route'}
+              open={openGroups.has('route')}
               onToggle={() => toggleGroup('route')}
             >
             <RoutePanel
@@ -1164,7 +1242,7 @@ export function App() {
               hint={enabledLayerCount === 0 ? 'None on' : undefined}
               badge={enabledLayerCount || undefined}
               icon={ICONS.layers}
-              open={openGroup === 'layers'}
+              open={openGroups.has('layers')}
               onToggle={() => toggleGroup('layers')}
             >
             <LayersPanel
@@ -1189,7 +1267,7 @@ export function App() {
               title="Model"
               hint={`${config.modelWidth_mm} mm wide`}
               icon={ICONS.model}
-              open={openGroup === 'model'}
+              open={openGroups.has('model')}
               onToggle={() => toggleGroup('model')}
             >
             <section>
@@ -1679,7 +1757,7 @@ export function App() {
               title="Terrain"
               hint={`${config.verticalExaggeration.toFixed(1)}x relief`}
               icon={ICONS.terrain}
-              open={openGroup === 'terrain'}
+              open={openGroups.has('terrain')}
               onToggle={() => toggleGroup('terrain')}
             >
             <section>
@@ -1751,11 +1829,38 @@ export function App() {
             </Section>
 
             <Section
+              id="keychain"
+              title="Keychain"
+              icon={ICONS.keychain}
+              {...(config.keychain.enabled
+                ? { badge: `${config.modelWidth_mm} mm ${config.keychain.shape}` }
+                : { hint: 'Off' })}
+              open={openGroups.has('keychain')}
+              onToggle={() => toggleGroup('keychain')}
+            >
+            <section>
+              <KeychainPanel
+                keychain={config.keychain}
+                modelWidth_mm={config.modelWidth_mm}
+                includeRoutes={config.includeRoutes}
+                hasRoutes={routes.length > 0}
+                busy={busy}
+                onChange={(patch) => update({ keychain: { ...config.keychain, ...patch } })}
+                onModelWidth={(mm) => update({ modelWidth_mm: mm })}
+                onIncludeRoutes={(on) => update({ includeRoutes: on })}
+                onEnable={onKeychainMode}
+                onPickPeak={onKeychainPeak}
+              />
+            </section>
+
+            </Section>
+
+            <Section
               id="export"
               title="Print & export"
               hint={bundle ? 'Ready' : 'Nothing built yet'}
               icon={ICONS.export}
-              open={openGroup === 'export'}
+              open={openGroups.has('export')}
               onToggle={() => toggleGroup('export')}
             >
               <EstimatePanel
@@ -1845,6 +1950,13 @@ export function App() {
                 <div className={`alert alert--${error.level}`}>{error.text}</div>
               </section>
             ) : null}
+
+            {/* Last child of the pinned block and outside every section, so it
+                is always there rather than following the grid preview in and
+                out of existence. */}
+            <p className="panel__madeby">
+              Made with love by Mazen Habib and Gen. Asim Muneer
+            </p>
           </div>
         </aside>
         )}

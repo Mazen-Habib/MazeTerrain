@@ -11,10 +11,19 @@
  * knowing what any of it means yet, which is the whole argument for ordering by
  * workflow rather than by what the settings technically affect.
  *
- * **One open at a time.** An accordion that lets everything open is just the old
- * scroll with extra clicks. The cost is that comparing two groups means
- * switching between them; the benefit is that the panel always fits on screen,
- * so the thing you are working on is never half below the fold.
+ * **Groups open independently** (owner's call, 2026-09-11). This started as a
+ * one-open-at-a-time accordion, on the argument that the panel would then
+ * always fit on screen. What it actually bought was a panel that moved under
+ * the cursor: opening a group closed the one above it, so the header you had
+ * just clicked slid up the screen by the height of whatever collapsed — and
+ * since the groups are ordered the way a model is built, working top to bottom
+ * hit that on every single step. Reported as "the dropdowns open from the
+ * middle ... the button should stay in place and the contents should go down".
+ *
+ * With no auto-close the headers above the one you click cannot move, because
+ * nothing above it changed. The old risk is real — open all six and the panel
+ * is long again — but a long panel the user chose beats a short one that
+ * rearranges itself.
  *
  * Accessibility, because this is a disclosure widget and they are easy to get
  * wrong: the header is a real `<button>` (keyboard and screen-reader reachable
@@ -22,38 +31,66 @@
  * controls with `aria-controls`. Collapsed content is removed from the DOM
  * rather than hidden with CSS, so nothing inside it can take focus.
  */
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
-export type GroupId = 'place' | 'route' | 'layers' | 'model' | 'terrain' | 'export';
+export type GroupId =
+  | 'place'
+  | 'route'
+  | 'layers'
+  | 'model'
+  | 'terrain'
+  | 'keychain'
+  | 'export';
 
+/**
+ * Still singular, and deliberately.
+ *
+ * The key predates groups opening independently, and renaming it would silently
+ * reset the panel for everyone who has used the app. A comma-separated list
+ * parses a previously stored single id as a one-element list, so old state
+ * survives the change without a migration.
+ */
 const STORAGE_KEY = 'mazeterrain.openGroup';
 
-/** Which group is open on a first visit: the first step of the workflow. */
-export const DEFAULT_GROUP: GroupId = 'place';
+/** The groups in the order they appear in the panel, which is the order a model
+    is actually built in. Exported so a stored list can be written in panel order
+    rather than in whatever order the user happened to click. */
+export const GROUP_ORDER: readonly GroupId[] = [
+  'place',
+  'route',
+  'layers',
+  'model',
+  'terrain',
+  'keychain',
+  'export',
+];
 
-export function readOpenGroup(): GroupId | null {
+function isGroupId(v: string): v is GroupId {
+  return (GROUP_ORDER as readonly string[]).includes(v);
+}
+
+/** What is open on a first visit: the first step of the workflow, alone. */
+export const DEFAULT_GROUPS: readonly GroupId[] = ['place'];
+
+export function readOpenGroups(): GroupId[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === '') return null;
-    if (
-      stored === 'place' ||
-      stored === 'route' ||
-      stored === 'layers' ||
-      stored === 'model' ||
-      stored === 'terrain' ||
-      stored === 'export'
-    ) {
-      return stored;
+    if (stored === '') return [];
+    if (stored !== null) {
+      const ids = stored.split(',').filter(isGroupId);
+      // A stored value that parses to nothing is corrupt, not "all closed" —
+      // "all closed" is the empty string, handled above.
+      if (ids.length > 0) return [...new Set(ids)];
     }
   } catch {
     // Storage denied or full. The default is still a correct answer.
   }
-  return DEFAULT_GROUP;
+  return [...DEFAULT_GROUPS];
 }
 
-export function writeOpenGroup(id: GroupId | null): void {
+export function writeOpenGroups(ids: readonly GroupId[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, id ?? '');
+    localStorage.setItem(STORAGE_KEY, ids.join(','));
   } catch {
     // The choice still holds for this session.
   }
@@ -85,22 +122,60 @@ export function Section({
   onToggle,
   children,
 }: SectionProps) {
-  const body = useRef<HTMLDivElement>(null);
+  const head = useRef<HTMLButtonElement>(null);
 
   /**
-   * Bring a newly opened group into view.
+   * Where this header sat at the moment it was clicked.
    *
-   * Opening the last group in a scrolled panel otherwise expands content the
-   * user cannot see, and the panel looks like it did nothing. Deliberately
-   * `nearest`: scrolling the header to the top would yank the page on every
-   * toggle, which is worse than the problem.
+   * Only the header the user actually pressed gets one, which is what keeps the
+   * group that is CLOSING from fighting the group that is opening — both
+   * re-render on the same click, but only one of them has an anchor.
    */
-  useEffect(() => {
-    if (!open || !body.current) return;
-    const timer = setTimeout(() => {
-      body.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }, 180);
-    return () => clearTimeout(timer);
+  const anchor = useRef<number | null>(null);
+
+  /**
+   * Keep the clicked header under the cursor.
+   *
+   * Measured on the old single-open accordion: opening the last group moved its
+   * own header **619px up the screen**. 326px of that was a `scrollIntoView` on
+   * the newly opened BODY — for a body taller than the panel, `block: 'nearest'`
+   * aligns its top edge with the top of the scrollport, which drags the header
+   * out of view entirely. It was trying to reveal the content and threw away
+   * the one landmark the user was looking at. That call is gone.
+   *
+   * The other 292px was the auto-close, and dropping that (see the note at the
+   * top of this file) is what actually fixes the reported problem: nothing above
+   * the clicked header changes, so the header cannot move.
+   *
+   * What is left for this effect is the case neither of those covers. Closing a
+   * group while the panel is scrolled down shortens the content, the browser
+   * clamps `scrollTop` to the new maximum, and everything slides. So: measure
+   * the header before the toggle, let React commit, and put the offset back.
+   *
+   * `useLayoutEffect`, not `useEffect`: this has to happen before the browser
+   * paints, or the jump is visible and then corrected, which reads as a flinch.
+   */
+  useLayoutEffect(() => {
+    const was = anchor.current;
+    anchor.current = null;
+    const el = head.current;
+    if (was === null || !el) return;
+    const scroller = el.closest('.panel__scroll');
+    if (!scroller) return;
+
+    // Reading a rect forces layout, so each step sees the previous one.
+    const drift = el.getBoundingClientRect().top - was;
+    if (drift !== 0) scroller.scrollTop += drift;
+
+    /*
+     * Closing the last group shortens the panel, and the browser clamps
+     * scrollTop to the new maximum — so the anchor cannot always be honoured
+     * exactly. Whatever is left, the header must at least still be on screen.
+     */
+    const headBox = el.getBoundingClientRect();
+    const view = scroller.getBoundingClientRect();
+    if (headBox.top < view.top) scroller.scrollTop -= view.top - headBox.top;
+    else if (headBox.bottom > view.bottom) scroller.scrollTop += headBox.bottom - view.bottom;
   }, [open]);
 
   return (
@@ -108,9 +183,13 @@ export function Section({
       <button
         type="button"
         className="group__head"
+        ref={head}
         aria-expanded={open}
         aria-controls={`group-${id}`}
-        onClick={onToggle}
+        onClick={() => {
+          anchor.current = head.current?.getBoundingClientRect().top ?? null;
+          onToggle();
+        }}
       >
         <span className="group__icon" aria-hidden>
           {icon}
@@ -134,7 +213,7 @@ export function Section({
       </button>
 
       {open ? (
-        <div className="group__body" id={`group-${id}`} ref={body}>
+        <div className="group__body" id={`group-${id}`}>
           {children}
         </div>
       ) : null}
@@ -218,6 +297,12 @@ export const ICONS = {
       <circle cx="11.5" cy="3.5" r="1.5" />
     </>,
   ),
+  keychain: svg(
+    <>
+      <path d="M2.5 5a1.5 1.5 0 011.5-1.5h8A1.5 1.5 0 0113.5 5v6a1.5 1.5 0 01-1.5 1.5H4A1.5 1.5 0 012.5 11z" />
+      <circle cx="5" cy="5.8" r="0.9" />
+    </>,
+  ),
   export: svg(
     <>
       <path d="M8 10V2.5" />
@@ -245,14 +330,16 @@ const RAIL_ITEMS: Array<{ id: GroupId; label: string; icon: keyof typeof ICONS }
   { id: 'layers', label: 'Map layers', icon: 'layers' },
   { id: 'model', label: 'Model', icon: 'model' },
   { id: 'terrain', label: 'Terrain', icon: 'terrain' },
+  { id: 'keychain', label: 'Keychain', icon: 'keychain' },
   { id: 'export', label: 'Print & export', icon: 'export' },
 ];
 
 export function Rail({
-  openGroup,
+  openGroups,
   onPick,
 }: {
-  openGroup: GroupId | null;
+  /** Every group currently open, since more than one can be. */
+  openGroups: ReadonlySet<GroupId>;
   onPick: (id: GroupId) => void;
 }) {
   return (
@@ -261,7 +348,7 @@ export function Rail({
         <button
           key={item.id}
           type="button"
-          className={`rail__btn${openGroup === item.id ? ' rail__btn--on' : ''}`}
+          className={`rail__btn${openGroups.has(item.id) ? ' rail__btn--on' : ''}`}
           title={item.label}
           aria-label={item.label}
           onClick={() => onPick(item.id)}
