@@ -55,7 +55,7 @@ import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
 import { KeychainPanel } from './KeychainPanel';
-import peakLogo from '../assets/peak-logo.png';
+import peakForgeLogo from '../assets/peakforge-logo.png';
 import {
   GROUP_ORDER,
   ICONS,
@@ -989,7 +989,7 @@ export function App() {
       */}
       <div className="smallscreen" role="alert">
         <div className="smallscreen__card">
-          <h2>Peakora needs a bigger screen</h2>
+          <h2>Peak Forge needs a bigger screen</h2>
           <p>
             Choosing an area and setting up a print means drawing on a map and working
             through a column of settings. Both are genuinely bad on a phone, so rather
@@ -1014,18 +1014,18 @@ export function App() {
           {/*
             The wordmark, as the supplied artwork rather than set in type.
             `alt` carries the product name so the page still announces and
-            indexes as Peakora — an <img> with no text alternative in an <h1>
+            indexes as Peak Forge — an <img> with no text alternative in an <h1>
             leaves a screen reader reading out a filename.
           */}
-          <img className="topbar__logo" src={peakLogo} alt="Peakora" width={40} height={29} />
+          <img className="topbar__logo" src={peakForgeLogo} alt="Peak Forge" width={48} height={29} />
           {SUPPORT_URL ? (
             <a
               className="topbar__social"
               href={SUPPORT_URL}
               target="_blank"
               rel="noreferrer noopener"
-              title="Peakora on Instagram"
-              aria-label="Peakora on Instagram"
+              title="Peak Forge on Instagram"
+              aria-label="Peak Forge on Instagram"
             >
               <InstagramIcon />
             </a>

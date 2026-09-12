@@ -35,14 +35,14 @@ export type Settings = Omit<GenerateConfig, 'bbox'>;
 export const PROJECT_FORMAT = 1;
 
 /**
- * The `app` field, and why it accepts two values.
+ * The `app` field, and why it accepts three values.
  *
- * The project was renamed from MazeTerrain to Peakora on 2026-09-02. New files
- * say `peakora`; files written before that say `mazeterrain` and must keep
- * opening, because a rename is a decision about a name and not a reason to
- * invalidate someone's saved work.
+ * MazeTerrain -> Peakora (2026-09-02) -> Peak Forge (2026-09-12). New files say
+ * `peakforge`; files written under either older name must keep opening, because
+ * a rename is a decision about a name and not a reason to invalidate someone's
+ * saved work. The list only ever grows.
  */
-export type AppId = 'peakora' | 'mazeterrain';
+export type AppId = 'peakforge' | 'peakora' | 'mazeterrain';
 
 export interface ProjectFile {
   app: AppId;
@@ -330,7 +330,7 @@ export function serialiseProject(input: {
   routes: Route[];
 }): string {
   const file: ProjectFile = {
-    app: 'peakora',
+    app: 'peakforge',
     format: PROJECT_FORMAT,
     savedAt: new Date().toISOString(),
     areaLabel: input.areaLabel,
@@ -348,25 +348,28 @@ export function parseProject(text: string): ProjectFile {
   try {
     raw = JSON.parse(text);
   } catch {
-    throw new ProjectError('That is not a Peakora project — the file is not valid JSON.');
+    throw new ProjectError('That is not a Peak Forge project — the file is not valid JSON.');
   }
 
-  if (!isObject(raw) || (raw.app !== 'peakora' && raw.app !== 'mazeterrain')) {
+  if (
+    !isObject(raw) ||
+    (raw.app !== 'peakforge' && raw.app !== 'peakora' && raw.app !== 'mazeterrain')
+  ) {
     throw new ProjectError(
-      'That file is not a Peakora project. Look for one saved with "Save project".',
+      'That file is not a Peak Forge project. Look for one saved with "Save project".',
     );
   }
 
   const format = num(raw.format, 0);
   if (format > PROJECT_FORMAT) {
     throw new ProjectError(
-      `This project was saved by a newer version of Peakora (format ${format}, ` +
+      `This project was saved by a newer version of Peak Forge (format ${format}, ` +
         `this build reads ${PROJECT_FORMAT}). Update, or re-save it from the version that wrote it.`,
     );
   }
 
   return {
-    app: 'peakora',
+    app: 'peakforge',
     format,
     savedAt: str(raw.savedAt, ''),
     areaLabel: str(raw.areaLabel, 'Saved project'),

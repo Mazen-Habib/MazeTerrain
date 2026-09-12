@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Peakora design system
+   Peak Forge design system
    --------------------------------------------------------------------------
    Light by default, dark by choice. One token layer drives both; almost
    nothing below sets a colour literally, so a theme is a set of variables
@@ -300,10 +300,15 @@ body {
  * it is the one piece of brand on the page and it was previously carrying the
  * weight of a semibold 15px word.
  *
- * No filter, no colour change, in either theme. #FD4703 is the mark's own
- * orange and it holds against both the near-white and the near-black ground.
- * Logotypes are also the one thing WCAG 1.4.3 explicitly exempts, so the
- * 3.2:1 it measures on white is not a failure to fix.
+ * No filter, no colour change, in either theme. The mark carries its own two
+ * colours -- #FD4703 for PEAK and #0347FD for the F -- and both hold against
+ * the near-white and the near-black ground (3.5:1 and 3.1:1 at worst).
+ * Logotypes are the one thing WCAG 1.4.3 explicitly exempts, so those are not
+ * failures to fix; they are only checked here to be sure the mark is legible.
+ *
+ * The blue is deliberately not a new UI colour. The palette above is still
+ * white, black and one orange -- this is brand, it appears once, and nothing
+ * else on the page may reach for it.
  */
 .topbar__logo {
   display: block;

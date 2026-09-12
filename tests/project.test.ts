@@ -150,6 +150,27 @@ describe('reading a project that is wrong', () => {
     expect(back.settings.cutout).toEqual(settings().cutout);
   });
 
+  /**
+   * Every name the app has ever shipped under must still open.
+   *
+   * The list has grown twice now — MazeTerrain, then Peakora, then Peak Forge —
+   * and each rename is a decision about a name, not a reason to invalidate
+   * someone's saved work. A file written yesterday under the old name is the
+   * case a rename is most likely to break and least likely to be tried.
+   */
+  it.each(['mazeterrain', 'peakora', 'peakforge'])('opens a project written as %s', (app) => {
+    const back = parseProject(
+      JSON.stringify({ app, format: 1, settings: settings(), shape, routes: [] }),
+    );
+    expect(back.settings.modelWidth_mm).toBe(settings().modelWidth_mm);
+  });
+
+  it('still refuses a file from something else entirely', () => {
+    expect(() =>
+      parseProject(JSON.stringify({ app: 'terrainmaker', format: 1, settings: settings() })),
+    ).toThrow(/not a Peak Forge project/);
+  });
+
   it('replaces a value of the wrong type with the default', () => {
     const restored = restoreSettings({
       modelWidth_mm: 'wide',

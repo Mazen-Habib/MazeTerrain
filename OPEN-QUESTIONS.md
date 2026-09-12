@@ -9,7 +9,22 @@ alone.** Format: question, why it matters, options, owner, status.
 
 ## Product
 
-### Q1 — Project name — **resolved 2026-09-02: Peakora**
+### Q1 — Project name — **resolved 2026-09-12: Peak Forge**
+
+**Renamed again on 2026-09-12**, from Peakora to **Peak Forge**, with a two-colour
+wordmark supplied by the owner: a blue `F` ahead of the orange `PEAK`. The `F` is not set
+in type — no licence to the face was available, so it is the artwork's own `E` with its
+bottom bar removed, which makes the letterform exact rather than approximate.
+
+Everything user-visible follows: page title, wordmark, export filenames
+(`peakforge_<place>_<size>mm_<date>.stl`), the STL header, the 3MF `Application`
+metadata and the error copy. `.mzt` files now write `app: "peakforge"` and **accept all
+three names on read**, so nothing saved under either older name stops opening — guarded by
+a test that names each of them.
+
+Storage identifiers are still `mazeterrain.*`, for the third time and the same reason:
+renaming them silently discards cached DEM tiles, saved presets and the user's theme and
+panel state, for a cosmetic gain nobody can see.
 Was `MazeTerrain`, the working title from the reference PDF. Renamed throughout on
 2026-09-02.
 

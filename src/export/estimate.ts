@@ -90,7 +90,7 @@ const LINE_WIDTH_RATIO = 1.125;
  * is a ceiling the printer only reaches on long straight runs. A terrain model
  * is nearly all short segments, so it spends much of its life accelerating.
  *
- * **Calibrated 2026-08-30** against a sliced Peakora model — a 23.13 g
+ * **Calibrated 2026-08-30** against a sliced Peak Forge model — a 23.13 g
  * city-and-route disc with the route as a separate insert. Its per-line-type
  * breakdown:
  *

@@ -1,7 +1,7 @@
 /**
  * "Support me" (OPEN-QUESTIONS Q2 — free, 2026-09-01).
  *
- * Peakora is free. No accounts, no payments, no quota tracking, no backend —
+ * Peak Forge is free. No accounts, no payments, no quota tracking, no backend —
  * which is what keeps Esri's non-commercial imagery terms usable and keeps the
  * architecture entirely client-side.
  *
