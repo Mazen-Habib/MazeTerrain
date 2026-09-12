@@ -292,6 +292,30 @@ body {
 }
 
 /*
+ * The wordmark itself.
+ *
+ * A fixed height with width:auto, so the mark keeps its own proportions
+ * whatever the bar does — a logo that squashes is worse than no logo. 29px of
+ * cap height sits it slightly above the 15px type it replaced, which is right:
+ * it is the one piece of brand on the page and it was previously carrying the
+ * weight of a semibold 15px word.
+ *
+ * No filter, no colour change, in either theme. #FD4703 is the mark's own
+ * orange and it holds against both the near-white and the near-black ground.
+ * Logotypes are also the one thing WCAG 1.4.3 explicitly exempts, so the
+ * 3.2:1 it measures on white is not a failure to fix.
+ */
+.topbar__logo {
+  display: block;
+  height: 29px;
+  width: auto;
+  flex: 0 0 auto;
+  /* Poppins and the mark are both cap-height-aligned, so nudge the optical
+     baseline rather than letting the box sit low next to the buttons. */
+  margin-top: -1px;
+}
+
+/*
  * Beside the wordmark, so it reads as "whose app this is" rather than as a
  * control. No box and no background: it is a mark, not a button, and a chip
  * around it would give it the weight of the actions at the other end of the

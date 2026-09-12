@@ -55,6 +55,7 @@ import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
 import { KeychainPanel } from './KeychainPanel';
+import peakLogo from '../assets/peak-logo.png';
 import {
   GROUP_ORDER,
   ICONS,
@@ -1010,7 +1011,13 @@ export function App() {
           >
             <PanelIcon />
           </button>
-          Peakora
+          {/*
+            The wordmark, as the supplied artwork rather than set in type.
+            `alt` carries the product name so the page still announces and
+            indexes as Peakora — an <img> with no text alternative in an <h1>
+            leaves a screen reader reading out a filename.
+          */}
+          <img className="topbar__logo" src={peakLogo} alt="Peakora" width={40} height={29} />
           {SUPPORT_URL ? (
             <a
               className="topbar__social"
@@ -1842,11 +1849,20 @@ export function App() {
               <KeychainPanel
                 keychain={config.keychain}
                 modelWidth_mm={config.modelWidth_mm}
+                baseThickness_mm={config.baseThickness_mm}
+                maxHeight_mm={config.maxHeight_mm}
+                verticalExaggeration={config.verticalExaggeration}
+                /* What the last build could actually give, which is not what was
+                   asked for whenever the height cap bit. */
+                effectiveExaggeration={bundle ? bundle.stats.verticalExaggeration : null}
                 includeRoutes={config.includeRoutes}
                 hasRoutes={routes.length > 0}
                 busy={busy}
                 onChange={(patch) => update({ keychain: { ...config.keychain, ...patch } })}
                 onModelWidth={(mm) => update({ modelWidth_mm: mm })}
+                onBaseThickness={(mm) => update({ baseThickness_mm: mm })}
+                onMaxHeight={(mm) => update({ maxHeight_mm: mm })}
+                onExaggeration={(x) => update({ verticalExaggeration: x })}
                 onIncludeRoutes={(on) => update({ includeRoutes: on })}
                 onEnable={onKeychainMode}
                 onPickPeak={onKeychainPeak}

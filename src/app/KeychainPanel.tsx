@@ -20,11 +20,19 @@ import type { KeychainSettings } from '../geometry/types';
 interface KeychainPanelProps {
   keychain: KeychainSettings;
   modelWidth_mm: number;
+  baseThickness_mm: number;
+  maxHeight_mm: number;
+  verticalExaggeration: number;
+  /** What the build could actually give, after the max-height clamp. */
+  effectiveExaggeration: number | null;
   includeRoutes: boolean;
   hasRoutes: boolean;
   busy: boolean;
   onChange: (patch: Partial<KeychainSettings>) => void;
   onModelWidth: (mm: number) => void;
+  onBaseThickness: (mm: number) => void;
+  onMaxHeight: (mm: number) => void;
+  onExaggeration: (x: number) => void;
   onIncludeRoutes: (on: boolean) => void;
   /** Enable the mode, applying the model defaults above. */
   onEnable: (on: boolean) => void;
@@ -34,11 +42,18 @@ interface KeychainPanelProps {
 export function KeychainPanel({
   keychain,
   modelWidth_mm,
+  baseThickness_mm,
+  maxHeight_mm,
+  verticalExaggeration,
+  effectiveExaggeration,
   includeRoutes,
   hasRoutes,
   busy,
   onChange,
   onModelWidth,
+  onBaseThickness,
+  onMaxHeight,
+  onExaggeration,
   onIncludeRoutes,
   onEnable,
   onPickPeak,
@@ -138,6 +153,61 @@ export function KeychainPanel({
               onChange={(pct) => onChange({ cornerRadius_frac: pct / 100 })}
             />
           ) : null}
+
+          {/*
+           * Relief, here rather than only under Terrain and Model.
+           *
+           * On a keychain these are not secondary settings — they ARE the
+           * object. Total thickness is base plus relief, and a 40 mm tag that
+           * is 3 mm thick and one that is 12 mm thick are different products.
+           * Sending someone to two other groups to find that out, in the one
+           * mode built around "pick a mountain and press Generate", is the
+           * wrong trade even though it means these controls appear twice.
+           */}
+          <h2>Relief</h2>
+
+          <NumberField
+            label="Tallest point above the base"
+            unit="mm"
+            value={maxHeight_mm}
+            min={1}
+            max={20}
+            step={0.5}
+            disabled={busy}
+            hint={`Total thickness will be about ${(maxHeight_mm + baseThickness_mm).toFixed(1)} mm including the base.`}
+            onChange={onMaxHeight}
+          />
+
+          <NumberField
+            label="Vertical exaggeration"
+            unit="×"
+            value={verticalExaggeration}
+            min={0.5}
+            max={4}
+            step={0.1}
+            disabled={busy}
+            hint={
+              effectiveExaggeration !== null &&
+              Math.abs(effectiveExaggeration - verticalExaggeration) > 0.05
+                ? `Built at ${effectiveExaggeration.toFixed(2)}× — the height above caps it. Raise that to get the full ${verticalExaggeration.toFixed(1)}×.`
+                : 'Above 1× the relief is taller than life. Small models usually need it.'
+            }
+            onChange={onExaggeration}
+          />
+
+          <NumberField
+            label="Base"
+            unit="mm"
+            value={baseThickness_mm}
+            min={0.8}
+            max={6}
+            step={0.1}
+            disabled={busy}
+            hint="Solid material under the lowest ground. Thin saves plastic; thick survives being sat on."
+            onChange={onBaseThickness}
+          />
+
+          <h2>Edges &amp; hole</h2>
 
           <NumberField
             label="Edge rounding"

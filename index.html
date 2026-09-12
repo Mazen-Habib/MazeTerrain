@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Peakora</title>
     <!--
+      The peak glyph on its own, not the whole wordmark.
+
+      "PEAK" scaled into a 16px tab is four letters about three pixels wide
+      each. The A — drawn in the mark as a crossbar-less chevron, which is the
+      mountain the whole logo is about — is the one part that survives being
+      that small, so the favicon is exactly those pixels cropped out of the
+      supplied artwork.
+    -->
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <!--
       Stamp the theme before first paint.
 
       Reading it in a React effect means the light palette renders for a frame
