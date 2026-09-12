@@ -12,9 +12,15 @@ alone.** Format: question, why it matters, options, owner, status.
 ### Q1 — Project name — **resolved 2026-09-12: Peak Forge**
 
 **Renamed again on 2026-09-12**, from Peakora to **Peak Forge**, with a two-colour
-wordmark supplied by the owner: a blue `F` ahead of the orange `PEAK`. The `F` is not set
-in type — no licence to the face was available, so it is the artwork's own `E` with its
-bottom bar removed, which makes the letterform exact rather than approximate.
+wordmark supplied by the owner: the orange `PEAK` followed by an `F`, reading `PEAKF`.
+The `F` is not set in type — no licence to the face was available, so it is the artwork's
+own `E` with its bottom bar removed, which makes the letterform exact rather than
+approximate.
+
+The `F` is drawn as **vector, not baked into the logo PNG**, because it takes its colour
+from the theme: black on the light bar, white on the dark one. `PEAK` keeps its own
+`#FD4703` in both. That split is the only reason the mark is two elements instead of one
+image.
 
 Everything user-visible follows: page title, wordmark, export filenames
 (`peakforge_<place>_<size>mm_<date>.stl`), the STL header, the 3MF `Application`

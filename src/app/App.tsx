@@ -55,7 +55,8 @@ import { cancelGeneration, generate, terminateWorker } from '../workers/client';
 import { NumberField } from './NumberField';
 import { RoutePanel } from './RoutePanel';
 import { KeychainPanel } from './KeychainPanel';
-import peakForgeLogo from '../assets/peakforge-logo.png';
+import peakLogo from '../assets/peak-logo.png';
+import { PeakF } from './PeakF';
 import {
   GROUP_ORDER,
   ICONS,
@@ -1012,12 +1013,19 @@ export function App() {
             <PanelIcon />
           </button>
           {/*
-            The wordmark, as the supplied artwork rather than set in type.
-            `alt` carries the product name so the page still announces and
-            indexes as Peak Forge — an <img> with no text alternative in an <h1>
-            leaves a screen reader reading out a filename.
+            The wordmark: the supplied artwork for PEAK, plus the F drawn as
+            vector beside it. Two elements rather than one image because the F
+            has to follow the theme and PEAK must not — see `PeakF`.
+
+            `alt` carries the whole product name, so the page announces and
+            indexes as Peak Forge and the F stays decorative. An <img> with no
+            text alternative inside an <h1> leaves a screen reader reading out a
+            filename.
           */}
-          <img className="topbar__logo" src={peakForgeLogo} alt="Peak Forge" width={48} height={29} />
+          <span className="topbar__mark">
+            <img className="topbar__logo" src={peakLogo} alt="Peak Forge" width={40} height={29} />
+            <PeakF />
+          </span>
           {SUPPORT_URL ? (
             <a
               className="topbar__social"

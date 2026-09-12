@@ -292,32 +292,34 @@ body {
 }
 
 /*
- * The wordmark itself.
+ * The wordmark: supplied artwork for PEAK, vector for the F.
  *
- * A fixed height with width:auto, so the mark keeps its own proportions
- * whatever the bar does — a logo that squashes is worse than no logo. 29px of
- * cap height sits it slightly above the 15px type it replaced, which is right:
- * it is the one piece of brand on the page and it was previously carrying the
- * weight of a semibold 15px word.
+ * A fixed height with width:auto on both, so the mark keeps its proportions
+ * whatever the bar does — a logo that squashes is worse than no logo. They butt
+ * together with no CSS gap because the F's own viewBox carries the wordmark's
+ * 6-unit letterspacing, which keeps the spacing correct at any size rather than
+ * only at this one.
  *
- * No filter, no colour change, in either theme. The mark carries its own two
- * colours -- #FD4703 for PEAK and #0347FD for the F -- and both hold against
- * the near-white and the near-black ground (3.5:1 and 3.1:1 at worst).
- * Logotypes are the one thing WCAG 1.4.3 explicitly exempts, so those are not
- * failures to fix; they are only checked here to be sure the mark is legible.
+ * PEAK keeps its own #FD4703 in both themes: it is the brand, it is the only
+ * saturated thing in the bar, and it holds on the near-white and the near-black
+ * ground alike. The F instead takes --text — black on light, white on dark —
+ * which is why it is not part of the PNG.
  *
- * The blue is deliberately not a new UI colour. The palette above is still
- * white, black and one orange -- this is brand, it appears once, and nothing
- * else on the page may reach for it.
+ * Logotypes are what WCAG 1.4.3 exempts, so the orange measuring 3.5:1 on white
+ * is not a failure to fix; it was measured only to be sure the mark stays
+ * legible in both themes.
  */
-.topbar__logo {
+.topbar__mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.topbar__logo,
+.topbar__f {
   display: block;
   height: 29px;
   width: auto;
-  flex: 0 0 auto;
-  /* Poppins and the mark are both cap-height-aligned, so nudge the optical
-     baseline rather than letting the box sit low next to the buttons. */
-  margin-top: -1px;
 }
 
 /*
