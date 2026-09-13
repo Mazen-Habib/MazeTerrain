@@ -22,6 +22,7 @@ import {
   circleRing,
   isCounterClockwise,
   placeHole,
+  roundedRectRing,
   roundedSquareRing,
 } from '../src/geometry/keychain';
 import { validateMesh } from '../src/geometry/validate';
@@ -83,70 +84,113 @@ describe('outlines', () => {
   });
 });
 
+/** Distance from a point to the nearest outline segment. */
+function toOutline(ring: Ring, [px, py]: [number, number]): number {
+  let best = Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, ay] = ring[i]!;
+    const [bx, by] = ring[(i + 1) % ring.length]!;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const u = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+    best = Math.min(best, Math.hypot(px - (ax + dx * u), py - (ay + dy * u)));
+  }
+  return best;
+}
+
+/** Material between the hole and the outside, which must be at least the margin. */
+function wall(ring: Ring, hole: { centre: [number, number]; radius: number }): number {
+  return toOutline(ring, hole.centre) - hole.radius;
+}
+
 describe('the ring hole', () => {
-  it('sits due north on a circle, inside the margin', () => {
-    const { centre, radius, adjusted } = placeHole('circle', 40, 3.5, 1.6, 0);
-    expect(adjusted).toBe(false);
-    expect(centre[0]).toBeCloseTo(0, 6);
-    // Hole edge to model edge is exactly the margin asked for.
-    expect(20 - (centre[1] + radius)).toBeCloseTo(1.6, 6);
+  it('sits due north on a circle, with exactly the margin outside it', () => {
+    const ring = circleRing(40, 192);
+    const hole = placeHole(ring, 'north', 3.5, 1.6);
+    expect(hole.adjusted).toBe(false);
+    expect(hole.centre[0]).toBeCloseTo(0, 6);
+    expect(hole.centre[1]).toBeGreaterThan(14);
+    expect(wall(ring, hole)).toBeGreaterThanOrEqual(1.6 - 1e-6);
+    expect(wall(ring, hole)).toBeLessThan(1.6 + 0.01);
   });
 
-  it('sits in the corner on a square, inside the margin', () => {
-    const size = 40;
-    const corner = 5;
-    const { centre, radius } = placeHole('square', size, 3.5, 1.6, corner);
-    expect(centre[0]).toBeCloseTo(centre[1], 6);
-    // Distance from the corner arc's centre, plus the hole radius and the
-    // margin, must not exceed the corner radius — that IS the wall.
-    const arc = size / 2 - corner;
-    const fromArc = Math.hypot(centre[0] - arc, centre[1] - arc);
-    expect(fromArc + radius + 1.6).toBeLessThanOrEqual(corner + 1e-6);
-  });
-
-  /**
-   * The wall wins. An 8 mm hole does not fit a 5 mm corner with 1.6 mm of wall,
-   * and the answer is a smaller hole, not a thinner wall.
-   */
-  it('shrinks the hole rather than the wall, and says it did', () => {
-    const { radius, adjusted } = placeHole('square', 40, 8, 1.6, 5);
-    expect(adjusted).toBe(true);
-    expect(radius * 2).toBeLessThan(8);
-    expect(radius).toBeGreaterThan(0);
+  it('hugs the corner on a rounded square, with exactly the margin outside it', () => {
+    const ring = roundedSquareRing(40, 5);
+    const hole = placeHole(ring, 'corner', 3.5, 1.6);
+    expect(hole.centre[0]).toBeCloseTo(hole.centre[1], 6);
+    expect(hole.centre[0]).toBeGreaterThan(14);
+    expect(wall(ring, hole)).toBeGreaterThanOrEqual(1.6 - 1e-6);
+    expect(wall(ring, hole)).toBeLessThan(1.6 + 0.01);
   });
 
   /**
-   * The shipped defaults must not warn.
+   * The bug this placement was rewritten for.
    *
-   * They did: the first version of this constraint was conservative by a factor
-   * of two, so a 3.5 mm hole in a 5 mm corner was refused when it fits with
-   * 1.65 mm to spare. A warning that fires on settings nobody chose is how
-   * people learn to ignore warnings.
+   * A circle selection with the outline setting still on Square: the old code
+   * computed a square's corner, (16.2, 16.2), which is 22.9 mm from the middle
+   * of a 40 mm disc — outside it. The drill cut nothing and the tag shipped
+   * with no hole and no warning. Asked for a corner on a disc, it must still
+   * land inside with its wall.
    */
-  it('fits the default hole in the default corner without complaint', () => {
-    const { adjusted, radius } = placeHole('square', 40, 3.5, 1.6, 40 * 0.125);
-    expect(adjusted).toBe(false);
-    expect(radius).toBeCloseTo(1.75, 6);
+  it('lands inside a circle even when asked for a corner', () => {
+    const ring = circleRing(40, 192);
+    const hole = placeHole(ring, 'corner', 3.5, 1.6);
+    expect(Math.hypot(...hole.centre)).toBeLessThan(20 - 1.6 - 1.75 + 1e-6);
+    expect(wall(ring, hole)).toBeGreaterThanOrEqual(1.6 - 1e-6);
   });
 
-  /** The straight edges have to clear too, not just the corner arc. */
-  it('keeps the margin against the straight edges as well', () => {
-    for (const d of [2, 3, 3.5, 5, 6.5]) {
-      const size = 40;
-      const corner = 6;
-      const { centre, radius } = placeHole('square', size, d, 1.6, corner);
-      const toRightEdge = size / 2 - centre[0] - radius;
-      const toTopEdge = size / 2 - centre[1] - radius;
-      expect(toRightEdge).toBeGreaterThanOrEqual(1.6 - 1e-6);
-      expect(toTopEdge).toBeGreaterThanOrEqual(1.6 - 1e-6);
-    }
+  /** A route fitted with a rectangle is rarely square. */
+  it('finds the corner of a wide rounded rectangle', () => {
+    const ring = roundedRectRing(60, 30, 5);
+    const hole = placeHole(ring, 'corner', 3.5, 1.6);
+    expect(hole.centre[0]).toBeGreaterThan(24);
+    expect(hole.centre[1]).toBeGreaterThan(9);
+    expect(wall(ring, hole)).toBeGreaterThanOrEqual(1.6 - 1e-6);
+  });
+
+  it('works in the sharp corner of a plain square', () => {
+    const ring = roundedSquareRing(40, 0);
+    const hole = placeHole(ring, 'corner', 3.5, 1.6);
+    expect(hole.adjusted).toBe(false);
+    expect(wall(ring, hole)).toBeGreaterThanOrEqual(1.6 - 1e-6);
+    expect(wall(ring, hole)).toBeLessThan(1.6 + 0.01);
+  });
+
+  /**
+   * A hole too big for the corner moves inward; it keeps its size and its wall.
+   * Shrinking a hole that has room elsewhere would be refusing the user's size
+   * for nothing.
+   */
+  it('moves a big hole inward rather than shrinking it', () => {
+    const ring = roundedSquareRing(40, 5);
+    const hole = placeHole(ring, 'corner', 8, 1.6);
+    expect(hole.adjusted).toBe(false);
+    expect(hole.radius).toBeCloseTo(4, 6);
+    expect(wall(ring, hole)).toBeGreaterThanOrEqual(1.6 - 1e-6);
+  });
+
+  /** The wall wins when the model itself is too small: a smaller hole, not a thinner wall. */
+  it('shrinks the hole rather than the wall, and says it did', () => {
+    const ring = circleRing(10, 192);
+    const hole = placeHole(ring, 'north', 8, 1.6);
+    expect(hole.adjusted).toBe(true);
+    expect(hole.radius * 2).toBeLessThan(8);
+    expect(wall(ring, hole)).toBeGreaterThanOrEqual(1.6 - 1e-3);
+  });
+
+  /** The shipped defaults must not warn — a warning on settings nobody chose teaches people to ignore warnings. */
+  it('fits the default hole in the default corner without complaint', () => {
+    const hole = placeHole(roundedSquareRing(40, 40 * 0.125), 'corner', 3.5, 1.6);
+    expect(hole.adjusted).toBe(false);
+    expect(hole.radius).toBeCloseTo(1.75, 6);
   });
 
   it('never returns a zero or negative radius, however impossible the ask', () => {
     for (const margin of [1.6, 10, 100]) {
       for (const size of [40, 12, 4]) {
-        const { radius } = placeHole('square', size, 3.5, margin, size / 8);
-        expect(radius).toBeGreaterThan(0);
+        for (const ring of [roundedSquareRing(size, size / 8), circleRing(size)]) {
+          expect(placeHole(ring, 'corner', 3.5, margin).radius).toBeGreaterThan(0);
+        }
       }
     }
   });

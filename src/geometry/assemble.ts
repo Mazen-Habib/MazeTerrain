@@ -1474,7 +1474,9 @@ export async function assemble(
     positions: repaired.positions,
     indices: repaired.indices,
     manifold: validation.manifold,
-    ...(terrainBands ? { bands: terrainBands } : {}),
+    ...(terrainBands && terrainZ
+      ? { bands: terrainBands, bandRange_mm: [groundFloor_mm, terrainZ[1]] as [number, number] }
+      : {}),
   };
 
   let parts = [
@@ -1634,7 +1636,10 @@ export async function assemble(
           });
           // A part entirely outside the envelope is legitimately gone — but the
           // BODY vanishing means the fillet ate the model, which is a fault.
-          if (clipped) rounded.push({ ...part, ...clipped });
+          // The result as it comes back, NOT spread over the old part: the old
+          // part's per-triangle bands and normals describe a triangle list that
+          // no longer exists, and keeping them painted the terrain as confetti.
+          if (clipped) rounded.push(clipped);
         }
         if (rounded.length === 0) {
           throw new BooleanError(
@@ -1647,12 +1652,14 @@ export async function assemble(
       }
 
       if (config.keychain.hole.enabled) {
+        // Placed against the outline that was actually built, not the one the
+        // settings name — the two used to disagree, and a hole placed for a
+        // square corner on a disc lands outside the model.
         const hole = placeHole(
-          config.keychain.shape,
-          config.modelWidth_mm,
+          boundary_mm,
+          config.keychain.shape === 'circle' ? 'north' : 'corner',
           config.keychain.hole.diameter_mm,
           config.keychain.hole.margin_mm,
-          config.keychain.cornerRadius_frac * config.modelWidth_mm,
         );
         if (hole.adjusted) {
           warnings.push({
@@ -1686,9 +1693,7 @@ export async function assemble(
             }
           }
           drilled.push(
-            near
-              ? { ...part, ...(await subtractParts(part, [drill], { name: part.name, color: part.color })) }
-              : part,
+            near ? await subtractParts(part, [drill], { name: part.name, color: part.color }) : part,
           );
         }
         parts = drilled;

@@ -26,6 +26,9 @@ import {
   fitCircleToRoutes,
   fitSelectionToRoutes,
   keychainSelection,
+  modelRingLonLat,
+  reshapeSelection,
+  selectionOutline,
   selectionArea_km2,
   boxIntersectsRing,
   selectionBBox,
@@ -404,6 +407,19 @@ export function App() {
   const applyShape = useCallback(
     (next: SelectionShape, label?: string, moveMap = false) => {
       setShape(next);
+      /*
+       * The keychain outline follows the selection: draw a circle, get a round
+       * tag. Left independent, the two disagreed — a circle with the setting
+       * still on Square — and the build put the ring hole in a corner the disc
+       * does not have. A free polygon has no outline to follow, so it leaves
+       * the setting where it was.
+       */
+      const outline = selectionOutline(next);
+      if (outline) {
+        setSettings((c) =>
+          c.keychain.shape === outline ? c : { ...c, keychain: { ...c.keychain, shape: outline } },
+        );
+      }
       if (label) setAreaLabel(label);
       if (moveMap) setFitNonce((n) => n + 1);
       setDirty(true);
@@ -481,18 +497,35 @@ export function App() {
 
   /** A peak from the list: sets the area and the outline in one action. */
   const keychainShape = settings.keychain.shape;
-  const keychainCorner = settings.keychain.cornerRadius_frac;
   const onKeychainPeak = useCallback(
     (id: string) => {
       const peak = KEYCHAIN_PRESETS.find((p) => p.id === id);
       if (!peak) return;
       applyShape(
-        keychainSelection(peak.lon, peak.lat, peak.radius_m, keychainShape, keychainCorner),
+        keychainSelection(peak.lon, peak.lat, peak.radius_m, keychainShape),
         peak.label,
         true,
       );
     },
-    [applyShape, keychainShape, keychainCorner],
+    [applyShape, keychainShape],
+  );
+
+  /**
+   * Square or Circle, picked explicitly.
+   *
+   * Reshapes the selection to match — same centre, same width — so the map,
+   * the setting and the model are the same shape. Changing only the setting
+   * is what let them drift apart in the first place.
+   */
+  const onKeychainOutline = useCallback(
+    (outline: 'circle' | 'square') => {
+      setSettings((c) => ({ ...c, keychain: { ...c.keychain, shape: outline } }));
+      setDirty(true);
+      if (shape && selectionOutline(shape) !== outline) {
+        applyShape(reshapeSelection(shape, outline));
+      }
+    },
+    [shape, applyShape],
   );
 
   /** The primary first-run path: upload a GPX and the selection is already right. */
@@ -731,7 +764,8 @@ export function App() {
     try {
       // A rectangle IS its bounding box, so it needs no clipping pass. Anything
       // else has to be clipped or the model exports as the bbox rectangle.
-      const ring = !shape || shape.kind === 'rectangle' ? null : selectionRingLonLat(shape);
+      // A keychain rectangle is also built from a ring, so its corners are round.
+      const ring = shape ? modelRingLonLat(shape, config.keychain) : null;
       const result = await generate(
         { config, routes: toSerialisable(routes), selectionRing: ring },
         (p) => setProgress(p),
@@ -1867,6 +1901,7 @@ export function App() {
                 hasRoutes={routes.length > 0}
                 busy={busy}
                 onChange={(patch) => update({ keychain: { ...config.keychain, ...patch } })}
+                onOutline={onKeychainOutline}
                 onModelWidth={(mm) => update({ modelWidth_mm: mm })}
                 onBaseThickness={(mm) => update({ baseThickness_mm: mm })}
                 onMaxHeight={(mm) => update({ maxHeight_mm: mm })}

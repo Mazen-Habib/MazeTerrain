@@ -26,6 +26,17 @@ export interface MeshPart {
    * about where the snowline is.
    */
   bands?: Uint8Array;
+  /**
+   * The Z range, print mm, that `bands` was measured against.
+   *
+   * Carried so a boolean can re-band what it returns. Bands are per TRIANGLE,
+   * and a CSG kernel hands back a different triangle list in a different order,
+   * so a cut part that kept its old `bands` painted every triangle with some
+   * other triangle's colour — the terrain came out as confetti. Re-banding needs
+   * the ORIGINAL range, not the cut part's own: a keychain fillet lowers the
+   * rim, and re-measuring would slide the snowline.
+   */
+  bandRange_mm?: [number, number];
 }
 
 export interface MeshStats {

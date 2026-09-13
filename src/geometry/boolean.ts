@@ -11,6 +11,7 @@
  * boolean at all, so nothing here is imported until a single-colour mode is
  * actually selected.
  */
+import { bandTriangles } from './palette';
 import type { MeshPart } from './types';
 
 /** Minimal shape of what `manifold-3d` hands back, so this file owns its types. */
@@ -104,7 +105,20 @@ function toSolid(wasm: ManifoldModule, part: MeshPart): ManifoldSolid {
   );
 }
 
-function fromSolid(solid: ManifoldSolid, name: string, color: string): MeshPart {
+/**
+ * Wrap a kernel result as a part.
+ *
+ * `bandSource` is the part whose hypsometric bands the result should carry.
+ * Bands are per triangle and the kernel returns a new triangle list in a new
+ * order, so they are recomputed against the source's original Z range rather
+ * than copied — copied bands paint every triangle with a stranger's colour.
+ */
+function fromSolid(
+  solid: ManifoldSolid,
+  name: string,
+  color: string,
+  bandSource?: MeshPart,
+): MeshPart {
   const mesh = solid.getMesh();
   if (mesh.numProp !== 3) {
     // Only ever 3 for the meshes this module creates, but a silent stride
@@ -114,12 +128,17 @@ function fromSolid(solid: ManifoldSolid, name: string, color: string): MeshPart 
       'The boolean operation returned geometry this app cannot read.',
     );
   }
+  const positions = new Float32Array(mesh.vertProperties);
+  const indices = new Uint32Array(mesh.triVerts);
+  const range = bandSource?.bands ? bandSource.bandRange_mm : undefined;
+  const bands = range ? bandTriangles(positions, indices, range[0], range[1]) : null;
   return {
     name,
     color,
-    positions: new Float32Array(mesh.vertProperties),
-    indices: new Uint32Array(mesh.triVerts),
+    positions,
+    indices,
     manifold: true,
+    ...(bands && range ? { bands, bandRange_mm: range } : {}),
   };
 }
 
@@ -158,7 +177,7 @@ export async function subtractParts(
           'the base thickness.',
       );
     }
-    return fromSolid(result, options.name, options.color);
+    return fromSolid(result, options.name, options.color, base);
   } finally {
     // WASM memory is not garbage collected. A build that leaks a few hundred
     // megabytes of solids will take the tab with it on the second run.
@@ -188,7 +207,9 @@ export async function unionParts(
   const wasm = await loadBooleans();
   const solids = parts.map((part) => toSolid(wasm, part));
   try {
-    return fromSolid(wasm.Manifold.union(solids), options.name, options.color);
+    // Bands follow the first part: a tile with its pegs is still that tile. A
+    // single-colour union has no bands on any part, so this is a no-op there.
+    return fromSolid(wasm.Manifold.union(solids), options.name, options.color, parts[0]);
   } finally {
     for (const solid of solids) solid.delete();
   }
@@ -216,7 +237,7 @@ export async function intersectPart(
   try {
     const result = baseSolid.intersect(boxSolid);
     if (result.isEmpty()) return null;
-    return fromSolid(result, options.name, options.color);
+    return fromSolid(result, options.name, options.color, base);
   } finally {
     baseSolid.delete();
     boxSolid.delete();

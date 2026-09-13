@@ -8,12 +8,12 @@
  *   2. every outer edge is filleted, and
  *   3. a hole is drilled for the split ring.
  *
- * (1) needs no code here at all — it is a selection shape, and the terrain
+ * (1) needs almost no code here — it is the selection outline, and the terrain
  * clipper, the feature clipper and the wall builder already take an arbitrary
- * ring. Generating the round-cornered square as a *selection polygon* rather
- * than rounding corners in 3D afterwards is the whole trick: by the time the
- * body exists its corners are already round, and nothing downstream needed to
- * learn a new case.
+ * ring. Handing them a round-cornered *ring* (see `modelRingLonLat` in
+ * selection.ts) rather than rounding corners in 3D afterwards is the whole
+ * trick: by the time the body exists its corners are already round, and
+ * nothing downstream needed to learn a new case.
  *
  * (2) and (3) are here, and both are booleans against the finished body rather
  * than changes to how it is built. A fillet on an arbitrary terrain mesh is not
@@ -63,24 +63,40 @@ export function roundedSquareRing(
   cornerRadius: number,
   stepsPerCorner = 8,
 ): Ring {
-  const half = size / 2;
-  const r = Math.max(0, Math.min(cornerRadius, half));
+  return roundedRectRing(size, size, cornerRadius, stepsPerCorner);
+}
+
+/**
+ * A rectangle with rounded corners, centred on the origin.
+ *
+ * A drawn rectangle, or a route fitted with one, is rarely exactly square, and
+ * its corners catch a pocket just the same.
+ */
+export function roundedRectRing(
+  width: number,
+  height: number,
+  cornerRadius: number,
+  stepsPerCorner = 8,
+): Ring {
+  const hw = width / 2;
+  const hh = height / 2;
+  const r = Math.max(0, Math.min(cornerRadius, hw, hh));
   if (r === 0) {
     return [
-      [-half, -half],
-      [half, -half],
-      [half, half],
-      [-half, half],
+      [-hw, -hh],
+      [hw, -hh],
+      [hw, hh],
+      [-hw, hh],
     ];
   }
 
   const ring: Ring = [];
   // Corner arc centres, counter-clockwise from the bottom-right.
   const corners: Array<{ cx: number; cy: number; from: number }> = [
-    { cx: half - r, cy: -(half - r), from: -Math.PI / 2 },
-    { cx: half - r, cy: half - r, from: 0 },
-    { cx: -(half - r), cy: half - r, from: Math.PI / 2 },
-    { cx: -(half - r), cy: -(half - r), from: Math.PI },
+    { cx: hw - r, cy: -(hh - r), from: -Math.PI / 2 },
+    { cx: hw - r, cy: hh - r, from: 0 },
+    { cx: -(hw - r), cy: hh - r, from: Math.PI / 2 },
+    { cx: -(hw - r), cy: -(hh - r), from: Math.PI },
   ];
   for (const { cx, cy, from } of corners) {
     for (let i = 0; i <= stepsPerCorner; i++) {
@@ -112,6 +128,12 @@ export interface HolePlacement {
   adjusted: boolean;
 }
 
+/** Where on the outline the hole starts looking from. */
+export type HoleAnchor = 'north' | 'corner';
+
+/** Samples along the walk inward. Refined by bisection, so this only needs to find the crossing. */
+const HOLE_WALK_STEPS = 512;
+
 /**
  * Where the split-ring hole goes, and whether it fits.
  *
@@ -120,56 +142,109 @@ export interface HolePlacement {
  * the keys are dropped, so this is the number that decides whether the keychain
  * survives, and it is defended ahead of the hole's own size.
  *
- * Circle: due north, because a disc has no distinguished point and north is the
- * one the map has already agreed on. Square: the corner, which is where a
- * rectangular tag has hung since tags existed, and which on a terrain tile is
- * usually the quietest ground.
+ * North: top-centre, because a disc has no distinguished point and north is the
+ * one the map has already agreed on. Corner: the north-east corner, which is
+ * where a rectangular tag has hung since tags existed, and which on a terrain
+ * tile is usually the quietest ground.
+ *
+ * **Measured against the real outline**, not derived from the settings. An
+ * earlier version took "square, 40 mm, 5 mm corner" and computed the answer —
+ * which was exact for that square and wrong for everything else: a circle
+ * selection with the setting on Square put the hole in a corner the disc does
+ * not have, and the drill cut air. Now the hole walks inward from the anchor —
+ * toward the middle from north, down the 45 degree bisector from a corner — and
+ * stops at the first place its wall is at least `margin` thick,
+ * so it is right for any outline the model was actually built with. A hole too
+ * big for the corner moves inward rather than shrinking; it only shrinks when
+ * the whole model is too small to hold it.
  */
 export function placeHole(
-  shape: KeychainShape,
-  size: number,
+  boundary: Ring,
+  anchor: HoleAnchor,
   holeDiameter: number,
   margin: number,
-  cornerRadius: number,
 ): HolePlacement {
-  const half = size / 2;
-  let radius = holeDiameter / 2;
-  let adjusted = false;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of boundary) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const hw = (maxX - minX) / 2 || 1;
+  const hh = (maxY - minY) / 2 || 1;
 
-  if (shape === 'circle') {
-    // The centre sits on the north radius, pulled in far enough to leave
-    // `margin` outside the hole: the hole's outer edge lands at half - margin
-    // wherever it is sized, so the wall is exactly the margin by construction.
-    const maxRadius = Math.max(0.25, half - margin);
-    if (radius > maxRadius) {
-      radius = maxRadius;
-      adjusted = true;
+  // A corner walk starts from the corner of the bounds, not from an outline
+  // vertex: its bisector runs through the middle of any rounded corner however
+  // wide the rectangle, and on a shape with no corner there (a disc) the first
+  // samples are simply outside and the walk carries on in.
+  const start: Pair = anchor === 'corner' ? [maxX, maxY] : [cx, maxY];
+
+  // From a corner, down the bisector rather than straight at the centre: on a
+  // wide rectangle the centre is at a shallow angle, and walking toward it
+  // slides the hole along the long edge instead of tucking it into the corner.
+  const reach = Math.min(hw, hh);
+  const [tx, ty]: Pair = anchor === 'corner' ? [start[0] - reach, start[1] - reach] : [cx, cy];
+  const at = (t: number): Pair => [start[0] + (tx - start[0]) * t, start[1] + (ty - start[1]) * t];
+  const radius = holeDiameter / 2;
+  const need = radius + margin;
+
+  let bestT = 1;
+  let bestClearance = -Infinity;
+  let prevT = 0;
+  for (let i = 0; i <= HOLE_WALK_STEPS; i++) {
+    const t = i / HOLE_WALK_STEPS;
+    const c = clearance(boundary, at(t));
+    if (c >= need) {
+      // Bisect back toward the edge: the hole should hug the outline, not sit
+      // wherever the coarse step happened to land.
+      let lo = i === 0 ? t : prevT;
+      let hi = t;
+      for (let k = 0; k < 40 && i > 0; k++) {
+        const mid = (lo + hi) / 2;
+        if (clearance(boundary, at(mid)) >= need) hi = mid;
+        else lo = mid;
+      }
+      return { centre: at(hi), radius, adjusted: false };
     }
-    return { centre: [0, half - margin - radius], radius, adjusted };
+    if (c > bestClearance) {
+      bestClearance = c;
+      bestT = t;
+    }
+    prevT = t;
   }
 
-  /*
-   * Square: hug the rounded corner.
-   *
-   * The corner arc has centre (half-c, half-c) and radius c, so a hole pushed
-   * `out` along the diagonal from that centre is `c - out` from the outline and
-   * needs `c - out - radius >= margin`. Pushing it as far out as that allows
-   * gives out = c - margin - radius, and the hole fits at all when
-   * radius <= c - margin.
-   *
-   * The two straight edges are a slacker constraint and need no separate check:
-   * substituting that `out` leaves 0.293 * (c - margin - radius) of slack
-   * against them, which is non-negative whenever the arc constraint holds.
-   */
-  const c = Math.max(0, Math.min(cornerRadius, half));
-  const maxRadius = Math.max(0.25, c - margin);
-  if (radius > maxRadius) {
-    radius = maxRadius;
-    adjusted = true;
+  // Nowhere on the walk fits: keep the wall, shrink the hole to what the
+  // roomiest point can hold.
+  return {
+    centre: at(bestT),
+    radius: Math.max(0.25, bestClearance - margin),
+    adjusted: true,
+  };
+}
+
+/** Distance from a point to the outline, or -Infinity when the point is outside it. */
+function clearance(ring: Ring, [px, py]: Pair): number {
+  let inside = false;
+  let best = Infinity;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]!;
+    const [xj, yj] = ring[j]!;
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+
+    const dx = xi - xj;
+    const dy = yi - yj;
+    const len2 = dx * dx + dy * dy;
+    const u = len2 > 0 ? Math.max(0, Math.min(1, ((px - xj) * dx + (py - yj) * dy) / len2)) : 0;
+    const d = Math.hypot(px - (xj + dx * u), py - (yj + dy * u));
+    if (d < best) best = d;
   }
-  const out = Math.max(0, c - margin - radius);
-  const d = out / Math.SQRT2;
-  return { centre: [half - c + d, half - c + d], radius, adjusted };
+  return inside ? best : -Infinity;
 }
 
 /* ------------------------------------------------------------------ envelope */

@@ -12,7 +12,7 @@ import { projectENU, type EnuOrigin } from './coords';
 import { unionBBox } from '../data/gpx/parse';
 import type { Route } from '../data/gpx/types';
 import { pointInRing } from './route';
-import { roundedSquareRing } from './keychain';
+import { roundedRectRing } from './keychain';
 
 /** F2 requires N >= 128 so a printed circle reads as a circle. */
 export const CIRCLE_SEGMENTS = 192;
@@ -52,31 +52,106 @@ export function selectionRingLonLat(shape: SelectionShape): Array<[number, numbe
   }
 }
 
+export type KeychainOutline = 'circle' | 'square';
+
 /**
  * The selection a keychain wants (docs/02-feature-spec.md F13).
  *
- * The round-cornered square comes back as an ordinary POLYGON selection, which
- * is the whole reason keychain corners need no 3D work later: the terrain
- * clipper, the feature clipper and the wall builder already take an arbitrary
- * ring, so the model is born with its corners round. A square is a square
- * on the ground — `radius_m` is the half-width — so it prints square rather
- * than as a latitude-stretched rectangle.
+ * The square comes back as an ordinary RECTANGLE — square on the ground, with
+ * `radius_m` as the half-width, so it prints square rather than as a
+ * latitude-stretched rectangle. Its corners are rounded when the model is
+ * built (`modelRingLonLat`), not here: a rectangle keeps the map's resize
+ * handles, and the corner rounding setting then applies to it live instead of
+ * being frozen into a polygon at the moment a peak was picked.
  */
 export function keychainSelection(
   lon: number,
   lat: number,
   radius_m: number,
-  shape: 'circle' | 'square',
-  cornerRadius_frac: number,
+  outline: KeychainOutline,
 ): SelectionShape {
-  if (shape === 'circle') return { kind: 'circle', lon, lat, radius_m };
+  if (outline === 'circle') return { kind: 'circle', lon, lat, radius_m };
 
+  const dLat = radius_m / EARTH_RADIUS_M / DEG;
+  const dLon = dLat / Math.cos(lat * DEG);
+  return {
+    kind: 'rectangle',
+    bbox: { west: lon - dLon, south: lat - dLat, east: lon + dLon, north: lat + dLat },
+  };
+}
+
+/**
+ * Which keychain outline a selection already is, or null for a free shape.
+ *
+ * The keychain's Outline setting follows this. Without it the setting and the
+ * map could disagree — a circle drawn while the setting still said Square —
+ * and the ring hole was placed for the shape the setting named, which on a disc
+ * is a corner that does not exist: the drill cut air and the tag had no hole.
+ */
+export function selectionOutline(shape: SelectionShape): KeychainOutline | null {
+  switch (shape.kind) {
+    case 'circle':
+      return 'circle';
+    case 'rectangle':
+      return 'square';
+    case 'polygon':
+      return null;
+  }
+}
+
+/** Centre and ground half-extents of a selection, in metres. */
+function groundExtent(shape: SelectionShape): {
+  lon: number;
+  lat: number;
+  halfW_m: number;
+  halfH_m: number;
+} {
+  if (shape.kind === 'circle') {
+    return { lon: shape.lon, lat: shape.lat, halfW_m: shape.radius_m, halfH_m: shape.radius_m };
+  }
+  const { west, south, east, north } = selectionBBox(shape);
+  const lat = (south + north) / 2;
+  const mPerDegLat = EARTH_RADIUS_M * DEG;
+  return {
+    lon: (west + east) / 2,
+    lat,
+    halfW_m: ((east - west) / 2) * mPerDegLat * Math.cos(lat * DEG),
+    halfH_m: ((north - south) / 2) * mPerDegLat,
+  };
+}
+
+/**
+ * The same selection as the other keychain outline: same centre, same width.
+ *
+ * "Same width" rather than "still contains everything" so that flipping
+ * between the two is stable — a circle drawn around a square's corners grows
+ * by root two every round trip.
+ */
+export function reshapeSelection(shape: SelectionShape, outline: KeychainOutline): SelectionShape {
+  const { lon, lat, halfW_m, halfH_m } = groundExtent(shape);
+  return keychainSelection(lon, lat, Math.max(halfW_m, halfH_m), outline);
+}
+
+/**
+ * The outline the model is actually built from, or null for "the bbox itself".
+ *
+ * In keychain mode a rectangle is built with rounded corners — every rectangle,
+ * whether it came from a peak, the draw tool or "Fit to routes", because a
+ * sharp corner is the part that catches in a pocket whoever drew it.
+ */
+export function modelRingLonLat(
+  shape: SelectionShape,
+  keychain: { enabled: boolean; cornerRadius_frac: number },
+): Array<[number, number]> | null {
+  if (shape.kind !== 'rectangle') return selectionRingLonLat(shape);
+  if (!keychain.enabled || keychain.cornerRadius_frac <= 0) return null;
+
+  const { lon, lat, halfW_m, halfH_m } = groundExtent(shape);
   const dLatPerM = 1 / EARTH_RADIUS_M / DEG;
   const dLonPerM = dLatPerM / Math.cos(lat * DEG);
-  const ring = roundedSquareRing(radius_m * 2, radius_m * 2 * cornerRadius_frac).map(
+  return roundedRectRing(halfW_m * 2, halfH_m * 2, halfW_m * 2 * keychain.cornerRadius_frac).map(
     ([x_m, y_m]) => [lon + x_m * dLonPerM, lat + y_m * dLatPerM] as [number, number],
   );
-  return { kind: 'polygon', ring };
 }
 
 /** Axis-aligned bounds of a selection — what the DEM fetcher needs. */

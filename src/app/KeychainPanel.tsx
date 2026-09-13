@@ -29,6 +29,8 @@ interface KeychainPanelProps {
   hasRoutes: boolean;
   busy: boolean;
   onChange: (patch: Partial<KeychainSettings>) => void;
+  /** Switch outline, reshaping the selection to match. */
+  onOutline: (outline: KeychainSettings['shape']) => void;
   onModelWidth: (mm: number) => void;
   onBaseThickness: (mm: number) => void;
   onMaxHeight: (mm: number) => void;
@@ -50,6 +52,7 @@ export function KeychainPanel({
   hasRoutes,
   busy,
   onChange,
+  onOutline,
   onModelWidth,
   onBaseThickness,
   onMaxHeight,
@@ -113,7 +116,7 @@ export function KeychainPanel({
               className={`segmented__btn${keychain.shape === 'square' ? ' segmented__btn--on' : ''}`}
               disabled={busy}
               aria-pressed={keychain.shape === 'square'}
-              onClick={() => onChange({ shape: 'square' })}
+              onClick={() => onOutline('square')}
             >
               Square
             </button>
@@ -122,11 +125,15 @@ export function KeychainPanel({
               className={`segmented__btn${keychain.shape === 'circle' ? ' segmented__btn--on' : ''}`}
               disabled={busy}
               aria-pressed={keychain.shape === 'circle'}
-              onClick={() => onChange({ shape: 'circle' })}
+              onClick={() => onOutline('circle')}
             >
               Circle
             </button>
           </div>
+          <p className="note">
+            Follows your selection — draw a circle and you get a round tag. Picking the other one
+            reshapes the selection to match.
+          </p>
 
           <NumberField
             label="Size"

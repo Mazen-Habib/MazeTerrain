@@ -6,7 +6,8 @@
  * (OPEN-QUESTIONS Q9), so a test that stubs it out would be testing nothing.
  */
 import { describe, expect, it } from 'vitest';
-import { subtractParts, unionParts, BooleanError } from '../src/geometry/boolean';
+import { intersectPart, subtractParts, unionParts, BooleanError } from '../src/geometry/boolean';
+import { bandTriangles } from '../src/geometry/palette';
 import { validateMesh } from '../src/geometry/validate';
 import type { MeshPart } from '../src/geometry/types';
 
@@ -237,5 +238,70 @@ describe('a channel cut through something standing on the terrain', () => {
     // is one piece.
     expect(componentCount(cut)).toBe(1);
     expect(validateMesh(cut.positions, cut.indices).manifold).toBe(true);
+  });
+});
+
+/**
+ * Hypsometric bands survive a cut.
+ *
+ * Bands are one byte per triangle, and the kernel returns a new triangle list in
+ * a new order. A keychain build used to spread the cut result over the original
+ * part, keeping the ORIGINAL bands against the NEW triangles — the terrain came
+ * out as random tan, grey, green and white confetti, with a solid block wherever
+ * the old list ran out. Every boolean now re-bands against the source's range.
+ */
+describe('bands through booleans', () => {
+  function banded(): MeshPart {
+    const part = boxPart('terrain', [0, 0, 0], [10, 10, 10]);
+    const range: [number, number] = [2, 10];
+    return {
+      ...part,
+      bands: bandTriangles(part.positions, part.indices, range[0], range[1])!,
+      bandRange_mm: range,
+    };
+  }
+
+  function expectConsistent(part: MeshPart): void {
+    expect(part.bands).toBeDefined();
+    expect(part.bands!.length * 3).toBe(part.indices.length);
+    expect(part.bandRange_mm).toEqual([2, 10]);
+    expect(Array.from(part.bands!)).toEqual(
+      Array.from(bandTriangles(part.positions, part.indices, 2, 10)!),
+    );
+  }
+
+  it('re-bands a subtract against the original range', async () => {
+    const cut = await subtractParts(banded(), [boxPart('hole', [3, 3, -1], [5, 5, 11])], {
+      name: 'terrain',
+      color: '#fff',
+    });
+    expectConsistent(cut);
+  });
+
+  it('re-bands an intersect against the original range, not its own', async () => {
+    // Keeps only the bottom half: re-measuring would stretch the scale to 5 mm.
+    const cut = await intersectPart(banded(), boxPart('box', [-1, -1, -1], [11, 11, 5]), {
+      name: 'terrain',
+      color: '#fff',
+    });
+    expectConsistent(cut!);
+  });
+
+  it('re-bands a union from its first part', async () => {
+    const joined = await unionParts([banded(), boxPart('peg', [9, 4, 1], [12, 6, 3])], {
+      name: 'terrain',
+      color: '#fff',
+    });
+    expectConsistent(joined);
+  });
+
+  it('leaves an unbanded part unbanded', async () => {
+    const cut = await subtractParts(
+      boxPart('roads', [0, 0, 0], [10, 10, 10]),
+      [boxPart('hole', [3, 3, -1], [5, 5, 11])],
+      { name: 'roads', color: '#fff' },
+    );
+    expect(cut.bands).toBeUndefined();
+    expect(cut.bandRange_mm).toBeUndefined();
   });
 });

@@ -300,7 +300,10 @@ export function Viewer({ bundle, shading, autoSpin }: ViewerProps) {
         // is the same band data the 3MF exports, so what the user sees here is
         // what a colour printer would make — the reason bands are discrete
         // rather than a smooth ramp.
-        if (part.bands) {
+        // Only when there is exactly one band per triangle. A mismatched list is
+        // a pipeline bug, and painting it gives colour noise that looks like a
+        // texture problem; one flat colour at least looks like what it is.
+        if (part.bands && part.bands.length * 3 === part.indices.length) {
           applyBandColours(geometry, part.bands);
           material = new THREE.MeshStandardMaterial({
             vertexColors: true,
